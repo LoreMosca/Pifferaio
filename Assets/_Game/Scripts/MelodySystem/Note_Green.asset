@@ -1,0 +1,19 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a40592e45c6762c4c876e7a8e7c01516, type: 3}
+  m_Name: Note_Green
+  m_EditorClassIdentifier: 
+  type: 0
+  noteName: Green
+  complexityCost: 1
+  icon: {fileID: 21300000, guid: 0a74c7c6780a57940b050ae2a2996ac1, type: 3}
+  debugColor: {r: 0.02537111, g: 0.690566, b: 0.014332486, a: 1}
