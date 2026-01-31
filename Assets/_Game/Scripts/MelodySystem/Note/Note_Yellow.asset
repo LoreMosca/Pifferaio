@@ -12,8 +12,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: a40592e45c6762c4c876e7a8e7c01516, type: 3}
   m_Name: Note_Yellow
   m_EditorClassIdentifier: 
-  type: 3
+  color: 3
   noteName: Yellow
-  complexityCost: 4
   icon: {fileID: 21300000, guid: efc974e6e232cac489e89b3f0f0550df, type: 3}
   debugColor: {r: 1, g: 0.8134147, b: 0, a: 1}
+  complexityCost: 4

@@ -4,23 +4,29 @@ using UnityEngine;
 [System.Serializable]
 public class Melody
 {
-    [Tooltip("Nome generato proceduralmente o assegnato.")]
-    public string spellName;
+    [Header("Info Generata")]
+    public string spellName; // Es: "Fireball"
+    public int tier;         // 1, 2, 3, 4
+    public int level = 1;    // <--- NUOVO: Livello della spell
 
-    [Tooltip("Livello di potenza (1-4).")]
-    public int tier;
-
-    [Tooltip("La sequenza di note richiesta per castare.")]
+    [Header("Sequenza")]
     public List<NoteDefinition> sequence = new List<NoteDefinition>();
 
-    // Ritorna vero se la sequenza passata è IDENTICA a questa melodia
-    public bool IsMatch(List<NoteDefinition> inputNotes)
+    // Helper per calcolare il costo totale
+    public int GetTotalCost()
     {
-        if (inputNotes.Count != sequence.Count) return false;
+        int total = 0;
+        foreach (var n in sequence) total += n.complexityCost;
+        return total;
+    }
 
+    // <--- NUOVO: Controlla se la sequenza è identica (per evitare duplicati)
+    public bool IsSameSequence(Melody other)
+    {
+        if (other == null || sequence.Count != other.sequence.Count) return false;
         for (int i = 0; i < sequence.Count; i++)
         {
-            if (inputNotes[i] != sequence[i]) return false;
+            if (sequence[i].color != other.sequence[i].color) return false;
         }
         return true;
     }

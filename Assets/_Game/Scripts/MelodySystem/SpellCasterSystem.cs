@@ -1,177 +1,178 @@
 using System.Collections.Generic;
-using System.Linq; // Necessario per .Last() etc
 using UnityEngine;
 
 public class SpellCasterSystem : MonoBehaviour
 {
-    [Header("Componenti Richiesti")]
+    [Header("Dependencies")]
+    public SpellBuilder builder;
     public ProceduralGenerator generator;
 
-    [Header("Input Settings")]
-    [Tooltip("Le 4 note assegnate ai tasti 1, 2, 3, 4.")]
-    public NoteDefinition[] noteKeyMap; // Ordine: 0=Tasto1, 1=Tasto2...
+    [Header("Input Mapping")]
+    [Tooltip("Ordine Tasti: 1, 2, 3, 4")]
+    public NoteDefinition[] keyMappings;
 
-    [Header("Stato Giocatore")]
-    [SerializeField]
-    [Tooltip("Incantesimi attualmente conosciuti/nell'inventario.")]
-    private List<Melody> knownSpells = new List<Melody>();
+    [Header("Visuals")]
+    public SpellVisualizer visualizer;
 
-    [SerializeField]
-    [Tooltip("Buffer FIFO delle ultime note suonate.")]
-    private List<NoteDefinition> noteQueue = new List<NoteDefinition>();
+    [Header("Runtime State")]
+    [SerializeField] private List<Melody> inventory = new List<Melody>();
 
-    // Variabile privata per tracciare se abbiamo un match pronto
-    private Melody readyToCastSpell = null;
+    [Header("FIFO Queue")]
+    [SerializeField] private List<NoteDefinition> currentInputQueue = new List<NoteDefinition>();
 
-    [Header("Debug")]
-    public bool showDebugGUI = true;
+    private const int QUEUE_SIZE = 4;
+    private Melody readySpell = null;
 
-    // Costante per la dimensione della FIFO
-    private const int MAX_QUEUE_SIZE = 4;
+    void Start()
+    {
+        if (generator == null) generator = GetComponent<ProceduralGenerator>();
+    }
 
     void Update()
     {
-        HandleInput();
+        // Input Tasti 1-4
+        if (Input.GetKeyDown(KeyCode.Alpha1)) PushNote(0);
+        if (Input.GetKeyDown(KeyCode.Alpha2)) PushNote(1);
+        if (Input.GetKeyDown(KeyCode.Alpha3)) PushNote(2);
+        if (Input.GetKeyDown(KeyCode.Alpha4)) PushNote(3);
 
-        // Loot Debug (Tasto L = Tier 1, K = Tier 2)
-        if (Input.GetKeyDown(KeyCode.L)) LootNewSpell(1);
-        if (Input.GetKeyDown(KeyCode.K)) LootNewSpell(2);
+        // Cast
+        if (Input.GetKeyDown(KeyCode.Space)) CastSpell();
+
+        // Debug Loot
+        if (Input.GetKeyDown(KeyCode.L)) LootRandom(1);
     }
 
-    void HandleInput()
+    void PushNote(int index)
     {
-        // Input Note (1, 2, 3, 4)
-        if (Input.GetKeyDown(KeyCode.Alpha1)) AddNoteToQueue(0);
-        if (Input.GetKeyDown(KeyCode.Alpha2)) AddNoteToQueue(1);
-        if (Input.GetKeyDown(KeyCode.Alpha3)) AddNoteToQueue(2);
-        if (Input.GetKeyDown(KeyCode.Alpha4)) AddNoteToQueue(3);
-
-        // Input Cast (Spazio)
-        if (Input.GetKeyDown(KeyCode.Space))
+        if (keyMappings == null || index >= keyMappings.Length || keyMappings[index] == null)
         {
-            TryCastSpell();
-        }
-    }
-
-    void AddNoteToQueue(int mapIndex)
-    {
-        if (mapIndex >= noteKeyMap.Length || noteKeyMap[mapIndex] == null) return;
-
-        // 1. Aggiungi nota
-        noteQueue.Add(noteKeyMap[mapIndex]);
-
-        // 2. FIFO Logic: Se superiamo 4, togliamo la più vecchia (indice 0)
-        if (noteQueue.Count > MAX_QUEUE_SIZE)
-        {
-            noteQueue.RemoveAt(0);
+            Debug.LogWarning($"KeyMapping mancante all'indice {index}");
+            return;
         }
 
-        // 3. Check Match
-        CheckForMatches();
+        currentInputQueue.Insert(0, keyMappings[index]);
+
+        if (currentInputQueue.Count > QUEUE_SIZE)
+            currentInputQueue.RemoveAt(currentInputQueue.Count - 1);
+
+        CheckMatches();
     }
 
-    void CheckForMatches()
+    void CheckMatches()
     {
-        readyToCastSpell = null;
+        readySpell = null;
+        if (inventory == null) return;
 
-        // Controlliamo ogni spell nell'inventario
-        foreach (var spell in knownSpells)
+        foreach (var spell in inventory)
         {
-            // Per matchare, la queue deve finire con la sequenza della spell
-            // Esempio: Queue [Verde, Rosso, Blu], Spell [Rosso, Blu] -> MATCH!
+            if (currentInputQueue.Count < spell.sequence.Count) continue;
 
-            if (IsSubsequenceMatch(spell.sequence, noteQueue))
+            bool match = true;
+            for (int i = 0; i < spell.sequence.Count; i++)
             {
-                readyToCastSpell = spell;
-                // Prendiamo il match più lungo o il primo trovato? Per ora il primo.
+                int queueIndex = (spell.sequence.Count - 1) - i;
+                if (currentInputQueue[queueIndex] != spell.sequence[i])
+                {
+                    match = false;
+                    break;
+                }
+            }
+
+            if (match)
+            {
+                readySpell = spell;
                 break;
             }
         }
     }
 
-    // Controlla se 'spellSeq' combacia con la PARTE FINALE di 'currentQueue'
-    bool IsSubsequenceMatch(List<NoteDefinition> spellSeq, List<NoteDefinition> currentQueue)
+    void CastSpell()
     {
-        if (spellSeq.Count > currentQueue.Count) return false;
+        if (readySpell == null) return;
 
-        int offset = currentQueue.Count - spellSeq.Count;
-        for (int i = 0; i < spellSeq.Count; i++)
+        // Nota: Passiamo l'intera 'readySpell' al builder, non solo la sequenza, 
+        // perché ci serve il Livello per il calcolo dei danni.
+        SpellPayload payload = builder.BuildSpell(readySpell);
+
+        Debug.Log($"<color=cyan>CASTING: {payload.constructedName.ToUpper()}</color>");
+
+        if (visualizer != null)
         {
-            if (currentQueue[offset + i] != spellSeq[i]) return false;
+            visualizer.VisualizeSpell(payload, this.transform);
         }
-        return true;
+
+        currentInputQueue.Clear();
+        readySpell = null;
     }
 
-    void TryCastSpell()
+    // <--- NUOVA LOGICA LOOT (LEVEL UP)
+    void LootRandom(int tier)
     {
-        if (readyToCastSpell != null)
+        if (generator != null)
         {
-            Debug.Log($"<color=green>CASTING {readyToCastSpell.spellName}!</color>");
+            Melody newLoot = generator.GenerateLoot(tier);
+            if (newLoot != null)
+            {
+                // Cerchiamo se esiste già
+                Melody existingSpell = inventory.Find(m => m.IsSameSequence(newLoot));
 
-            // Qui implementerai l'effetto vero
-            // ...
+                if (existingSpell != null)
+                {
+                    // Duplicato -> Level Up
+                    existingSpell.level++;
+                    Debug.Log($"<color=yellow>LEVEL UP!</color> {existingSpell.spellName} ora è Livello {existingSpell.level}");
+                }
+                else
+                {
+                    // Nuovo -> Aggiungi
+                    inventory.Add(newLoot);
+                    Debug.Log($"Loot Generato: {newLoot.spellName}");
+                }
 
-            // Consumiamo la queue? Di solito sì per evitare doppio cast immediato
-            noteQueue.Clear();
-            readyToCastSpell = null;
+                CheckMatches(); // Aggiorna stato ready immediato
+            }
         }
         else
         {
-            Debug.Log("FZZT! Nulla da castare (o ritmo sbagliato).");
+            Debug.LogError("ProceduralGenerator non assegnato!");
         }
     }
 
-    public void LootNewSpell(int tier)
-    {
-        Melody newSpell = generator.GenerateLoot(tier);
-        if (newSpell != null)
-        {
-            knownSpells.Add(newSpell);
-            Debug.Log($"Lootato: {newSpell.spellName}");
-        }
-    }
-
-    // --- VISUAL DEBUGGER (OnGUI) ---
-    // Disegna a schermo senza bisogno di Canvas setup
     void OnGUI()
     {
-        if (!showDebugGUI) return;
+        GUIStyle st = new GUIStyle(GUI.skin.label) { fontSize = 16, fontStyle = FontStyle.Bold };
+        st.normal.textColor = Color.white;
+        GUI.Box(new Rect(10, 10, 600, 400), "SYSTEM STATUS");
 
-        GUIStyle style = new GUIStyle();
-        style.fontSize = 20;
-        style.normal.textColor = Color.white;
-        style.fontStyle = FontStyle.Bold;
+        string q = "";
+        List<NoteDefinition> visualList = new List<NoteDefinition>(currentInputQueue);
+        visualList.Reverse();
+        foreach (var n in visualList) q += $"[{n.noteName}] ";
 
-        // Box Sfondo
-        GUI.Box(new Rect(10, 10, 400, 500), "SYSTEM DEBUG");
+        GUI.Label(new Rect(20, 40, 580, 30), "QUEUE: " + q, st);
 
-        // 1. Mostra Queue Attuale
-        string queueStr = "";
-        foreach (var n in noteQueue) queueStr += $"[{n.noteName}] ";
-        GUI.Label(new Rect(20, 40, 380, 30), $"QUEUE (FIFO 4):", style);
-
-        style.normal.textColor = Color.yellow;
-        GUI.Label(new Rect(20, 70, 380, 30), queueStr, style);
-
-        // 2. Mostra Stato Match
-        style.normal.textColor = readyToCastSpell != null ? Color.green : Color.gray;
-        string status = readyToCastSpell != null ? $"READY TO CAST: {readyToCastSpell.spellName} (Press SPACE)" : "NO MATCH";
-        GUI.Label(new Rect(20, 110, 380, 30), status, style);
-
-        // 3. Mostra Inventario
-        style.normal.textColor = Color.white;
-        GUI.Label(new Rect(20, 160, 380, 30), "KNOWN SPELLS (Press L to loot):", style);
-
-        int y = 190;
-        foreach (var spell in knownSpells)
+        if (readySpell != null)
         {
-            string seq = "";
-            foreach (var n in spell.sequence) seq += n.noteName.Substring(0, 1) + " "; // Solo iniziali
+            st.normal.textColor = Color.green;
+            GUI.Label(new Rect(20, 80, 580, 30), $"READY: {readySpell.spellName}!", st);
 
-            // Se questa è la spell pronta, colorala
-            style.normal.textColor = (spell == readyToCastSpell) ? Color.green : Color.white;
-            GUI.Label(new Rect(20, y, 380, 25), $"- {spell.spellName} [{seq}]", style);
-            y += 25;
+            SpellPayload preview = builder.BuildSpell(readySpell);
+            st.fontSize = 12; st.normal.textColor = Color.cyan;
+            GUI.Label(new Rect(20, 100, 580, 40), $"{preview.constructedName}\n({preview.effect} - {preview.delivery})", st);
+        }
+
+        st.fontSize = 14; st.normal.textColor = Color.white;
+        GUI.Label(new Rect(20, 150, 580, 30), "INVENTORY (Press L):", st);
+        float y = 170;
+        foreach (var s in inventory)
+        {
+            string seqStr = "";
+            foreach (var n in s.sequence) seqStr += n.noteName.Substring(0, 1) + " ";
+
+            // Aggiunto display livello
+            GUI.Label(new Rect(20, y, 580, 20), $"- {s.spellName} (Lv.{s.level}): {seqStr}", st);
+            y += 20;
         }
     }
 }
