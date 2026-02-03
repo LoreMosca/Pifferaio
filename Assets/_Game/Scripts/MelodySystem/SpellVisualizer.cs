@@ -47,13 +47,18 @@ public class SpellVisualizer : MonoBehaviour
     {
         GameObject obj = Instantiate(projectilePrefab, pos, rot);
         Colorize(obj, c);
+
+        // Rimuoviamo il vecchio Rigidbody movement se presente, ora ci pensa lo SmartScript
         Rigidbody rb = obj.GetComponent<Rigidbody>();
+        if (rb) rb.isKinematic = true; // O Destroy(rb);
 
-        // NOTA: Se usi una versione vecchia di Unity 6 (beta) o Unity 2022/2023, 
-        // cambia 'linearVelocity' in 'velocity' per risolvere l'errore.
-        if (rb) rb.linearVelocity = obj.transform.forward * projectileSpeed;
+        // Aggiungiamo il cervello
+        SmartProjectile brain = obj.GetComponent<SmartProjectile>();
+        if (brain == null) brain = obj.AddComponent<SmartProjectile>();
 
-        Destroy(obj, 3f);
+        // Lo inizializziamo con i dati del Payload e la velocità definita nel Builder
+        // Nota: p.tickRate nel Builder conteneva la velocità per i proiettili
+        brain.Initialize(p, p.tickRate);
     }
 
     void SpawnArea(Vector3 pos, Color c, SpellPayload p)
