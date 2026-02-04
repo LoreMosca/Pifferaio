@@ -31,6 +31,9 @@ public class SpellCasterSystem : MonoBehaviour
     [Tooltip("Le note premute finora in attesa di completare una sequenza.")]
     [SerializeField] private List<NoteDefinition> currentInputQueue = new List<NoteDefinition>();
 
+    // NUOVO: Lista degli indici della coda che corrispondono alla spell pronta (per illuminarli)
+    private List<int> matchedIndices = new List<int>();
+
     // Variabili interne
     private const int QUEUE_SIZE = 4;
     private Melody readySpell = null;
@@ -61,25 +64,35 @@ public class SpellCasterSystem : MonoBehaviour
     }
 
     /// <summary>
-    /// Controlla se le ultime note corrispondono a una magia nell'inventario.
+    /// Controlla se una sequenza valida è presente OVUNQUE nella coda.
     /// </summary>
     void CheckForCombinations()
     {
         readySpell = null; // Reset
+        matchedIndices.Clear(); // Reset evidenziazione
 
+        // Itera su tutte le spell nell'inventario
         foreach (var spell in inventory)
         {
-            // Se abbiamo abbastanza note per questa spell...
-            if (currentInputQueue.Count >= spell.sequence.Count)
-            {
-                // Prendi le ultime N note
-                var lastNotes = currentInputQueue.GetRange(currentInputQueue.Count - spell.sequence.Count, spell.sequence.Count);
+            int seqLen = spell.sequence.Count;
+            int queueLen = currentInputQueue.Count;
 
-                // Confronta i colori
+            // Se la coda è più corta della spell, impossibile matchare
+            if (queueLen < seqLen) continue;
+
+            // Pattern Matching: Cerca la sequenza della spell dentro la coda input
+            // Esempio: Coda [V, G, R, V] - Spell [G, R]
+            // Iterazione 0: Controllo V, G (No)
+            // Iterazione 1: Controllo G, R (Sì!) -> Match trovato agli indici 1 e 2
+
+            for (int startIdx = 0; startIdx <= queueLen - seqLen; startIdx++)
+            {
                 bool match = true;
-                for (int i = 0; i < spell.sequence.Count; i++)
+                for (int k = 0; k < seqLen; k++)
                 {
-                    if (lastNotes[i].color != spell.sequence[i].color)
+                    // startIdx + k è l'indice reale nella queue
+                    // k è l'indice nella sequenza della spell
+                    if (currentInputQueue[startIdx + k].color != spell.sequence[k].color)
                     {
                         match = false;
                         break;
@@ -88,18 +101,40 @@ public class SpellCasterSystem : MonoBehaviour
 
                 if (match)
                 {
+                    // Trovata! Salviamo la spell
                     readySpell = spell;
-                    return; // Trovata!
+
+                    // Salviamo QUALI indici illuminare
+                    matchedIndices.Clear();
+                    for (int k = 0; k < seqLen; k++)
+                    {
+                        matchedIndices.Add(startIdx + k);
+                    }
+
+                    return; // Fermati alla prima spell valida trovata (o implementa priorità qui)
                 }
             }
         }
     }
 
-    // --- API PER IL PLAYER CONTROLLER ---
+    // --- API PER ALTRI SISTEMI ---
 
     public bool HasSpellReady()
     {
         return readySpell != null;
+    }
+
+    public List<NoteDefinition> GetCurrentQueue()
+    {
+        return currentInputQueue;
+    }
+
+    /// <summary>
+    /// Ritorna la lista degli indici (0-3) che devono brillare perché formano una spell valida.
+    /// </summary>
+    public List<int> GetMatchedIndices()
+    {
+        return matchedIndices;
     }
 
     public void FireCurrentSpell(Transform originPoint)
@@ -119,6 +154,7 @@ public class SpellCasterSystem : MonoBehaviour
 
         // 3. Resetta dopo il lancio
         currentInputQueue.Clear();
+        matchedIndices.Clear();
         readySpell = null;
     }
 
@@ -136,19 +172,19 @@ public class SpellCasterSystem : MonoBehaviour
             if (newSpell != null)
             {
                 inventory.Add(newSpell);
-                // Debug.Log($"LOOTED: {newSpell.spellName} (Tier {tier})");
             }
         }
         else
         {
-            Debug.LogWarning("Nessuna LootTable assegnata per questo Tier!");
+            // Fallback
+            Melody newSpell = generator.GenerateLoot(tier);
+            if (newSpell != null) inventory.Add(newSpell);
         }
     }
 
     // --- INTERFACCIA DI DEBUG (ON GUI) ---
     void OnGUI()
     {
-        // Stile Testo
         GUIStyle st = new GUIStyle(GUI.skin.label) { fontSize = 14, fontStyle = FontStyle.Bold };
         st.normal.textColor = Color.white;
 
@@ -157,7 +193,6 @@ public class SpellCasterSystem : MonoBehaviour
 
         // 1. Coda Note
         string q = "";
-        // Copia per non modificare l'originale durante il foreach
         var visualQueue = new List<NoteDefinition>(currentInputQueue);
         foreach (var n in visualQueue) q += $"[{n.noteName}] ";
         GUI.Label(new Rect(20, 40, 280, 30), "INPUT: " + q, st);
@@ -183,7 +218,6 @@ public class SpellCasterSystem : MonoBehaviour
         if (GUI.Button(new Rect(110, 140, 80, 25), "+ Elite")) LootRandom(2);
         if (GUI.Button(new Rect(200, 140, 80, 25), "+ Boss")) LootRandom(3);
 
-
         // --- BOX DESTRO: INVENTARIO SPELL ---
         GUI.Box(new Rect(Screen.width - 260, 10, 250, 400), "GRIMORIO (Inventory)");
 
@@ -198,12 +232,10 @@ public class SpellCasterSystem : MonoBehaviour
 
         foreach (var spell in inventory)
         {
-            // Colore in base al Tier
             if (spell.tier == 1) st.normal.textColor = Color.white;
-            if (spell.tier == 2) st.normal.textColor = new Color(0.4f, 0.6f, 1f); // Azzurro
-            if (spell.tier >= 3) st.normal.textColor = new Color(1f, 0.6f, 0.2f); // Arancio
+            if (spell.tier == 2) st.normal.textColor = new Color(0.4f, 0.6f, 1f);
+            if (spell.tier >= 3) st.normal.textColor = new Color(1f, 0.6f, 0.2f);
 
-            // Componi la stringa della sequenza (es: V-R-V)
             string seq = "";
             foreach (var n in spell.sequence) seq += n.noteName.Substring(0, 1) + " ";
 
@@ -214,7 +246,7 @@ public class SpellCasterSystem : MonoBehaviour
             GUI.Label(new Rect(Screen.width - 240, yPos + 15, 230, 20),
                 $"[{seq}] T:{spell.tier}", st);
 
-            yPos += 40; // Spazio per la prossima
+            yPos += 40;
         }
     }
 }

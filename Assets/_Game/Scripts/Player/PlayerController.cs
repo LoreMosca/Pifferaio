@@ -1,60 +1,77 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
-using Unity.Cinemachine; // Assicurati di usare Unity 6 / Cinemachine 3.0
+using Unity.Cinemachine;
 using System.Collections;
 
 [RequireComponent(typeof(CharacterController))]
 public class PlayerController : MonoBehaviour
 {
-    [Header("--- BILANCIAMENTO ---")]
-    [Tooltip("Velocità di movimento standard in metri/secondo.")]
-    public float moveSpeed = 6f;
-    [Tooltip("Velocità di rotazione del personaggio verso il mouse.")]
-    public float rotationSpeed = 20f;
-    [Tooltip("Forza di gravità (deve essere negativa).")]
-    public float gravity = -9.81f;
+    [System.Serializable]
+    public class AttackConfig
+    {
+        [Header("Visuals")]
+        public GameObject prefab;
+        public GameObject chargePrefab;
+        [Tooltip("VFX spawnato all'impatto o fine estensione (es. Polvere/Detriti)")]
+        public GameObject impactVfx; // <--- NUOVO CAMPO
 
-    [Header("--- COMBAT MELEE (Attacchi 1-4) ---")]
-    [Tooltip("Cooldown in secondi per ogni tasto [0=Verde, 1=Blu, 2=Rosso, 3=Giallo].")]
-    public float[] attackCooldowns = new float[] { 0.4f, 0.8f, 1.5f, 1.0f };
+        [Header("Posizionamento")]
+        public AttackOrigin originType = AttackOrigin.CastPoint;
+        public float forwardOffset = 0.0f;
+        public float heightOffset = 0.0f;
 
-    [Tooltip("Lista dei PREFAB VFX da spawnare. L'ordine deve corrispondere ai colori (0=Verde...).")]
-    public GameObject[] skillVfxPrefabs;
+        [Header("Trasformazione")]
+        public Vector3 startScale = Vector3.one;
+        public Vector3 endScale = Vector3.one;
+        public float duration = 0.2f;
 
-    [Header("--- RIFERIMENTI VISUALI (Setup) ---")]
-    [Tooltip("TRASCINA QUI: L'oggetto vuoto sulla PUNTA del bastone (per scia e hit).")]
-    public Transform meleePoint;
+        [Header("Juice")]
+        public float screenShake = 0.0f;
+    }
 
-    [Tooltip("TRASCINA QUI: L'oggetto vuoto 'SpellOrigin' (davanti al petto) per i proiettili.")]
-    public Transform spellOrigin;
+    public enum AttackOrigin { CastPoint, PlayerCenter }
 
-    [Tooltip("TRASCINA QUI: Il componente Cinemachine Impulse Source (sul Player) per il tremolio.")]
-    public CinemachineImpulseSource impulseSource;
-
-    [Header("--- SISTEMI ESTERNI ---")]
-    [Tooltip("Trascina qui il GameObject con lo script SpellCasterSystem.")]
-    public SpellCasterSystem spellSystem;
-    [Tooltip("Trascina qui l'Animator del personaggio.")]
+    [Header("--- RIFERIMENTI ---")]
+    public Transform visualRoot;
+    public Transform castPoint;
     public Animator animator;
 
-    // --- VARIABILI INTERNE ---
+    [Header("--- PARAMETRI FISICI ---")]
+    public float moveSpeed = 6f;
+    public float rotationSpeed = 25f;
+    public float gravity = -9.81f;
+
+    [Header("--- CONFIGURAZIONE ATTACCHI ---")]
+    public AttackConfig greenConfig;
+    public AttackConfig blueConfig;
+    public AttackConfig redConfig;
+    public AttackConfig yellowConfig;
+
+    [Header("--- BILANCIAMENTO ---")]
+    public float minChargeTimeRed = 0.5f;
+    public float tapThresholdYellow = 0.2f;
+
+    [Header("--- SISTEMI ---")]
+    public SpellCasterSystem spellSystem;
+    public CinemachineImpulseSource impulseSource;
+
+    // Stati e Variabili interne
     private CharacterController controller;
     private GameInputs inputActions;
     private Camera mainCamera;
     private Vector2 moveInput;
     private Vector2 mousePos;
     private Vector3 velocity;
-    private float[] nextAttackTime = new float[4];
 
-    // Stati di Blocco
-    private bool isCasting = false;     // True = Animazione Magia in corso
-    private bool isAttacking = false;   // True = Animazione Melee in corso
+    private enum PlayerState { Normal, Attacking, ChargingRed, GuardingYellow, CastingSpell }
+    [SerializeField] private PlayerState currentState = PlayerState.Normal;
 
-    // Hash Animator (Ottimizzazione)
+    private float chargeStartTime;
+    private float guardStartTime;
+    private bool redChargeReadyFeedbackPlayed = false;
+    private GameObject activeShieldInstance;
+    private GameObject activeChargeVFX;
     private static readonly int AnimVelocityZ = Animator.StringToHash("VelocityZ");
-    private static readonly int AnimAttack = Animator.StringToHash("Attack");
-    private static readonly int AnimAttackType = Animator.StringToHash("AttackType");
-    private static readonly int AnimCast = Animator.StringToHash("Cast");
 
     void Awake()
     {
@@ -62,20 +79,17 @@ public class PlayerController : MonoBehaviour
         mainCamera = Camera.main;
         inputActions = new GameInputs();
 
-        // Binding Input
         inputActions.Player.Move.performed += ctx => moveInput = ctx.ReadValue<Vector2>();
         inputActions.Player.Move.canceled += ctx => moveInput = Vector2.zero;
         inputActions.Player.Look.performed += ctx => mousePos = ctx.ReadValue<Vector2>();
 
-        inputActions.Player.Skill1.performed += ctx => PerformMeleeAttack(0);
-        inputActions.Player.Skill2.performed += ctx => PerformMeleeAttack(1);
-        inputActions.Player.Skill3.performed += ctx => PerformMeleeAttack(2);
-        inputActions.Player.Skill4.performed += ctx => PerformMeleeAttack(3);
-
-        inputActions.Player.Cast.performed += ctx => PerformCastAbility();
-
-        // Tasto L per Loot Rapido (utile se non vuoi cliccare i bottoni a schermo)
-        inputActions.Player.Loot.performed += ctx => spellSystem.LootRandom(1);
+        inputActions.Player.Skill1.performed += ctx => PerformGreenAttack();
+        inputActions.Player.Skill2.performed += ctx => PerformBlueAttack();
+        inputActions.Player.Skill3.started += ctx => StartChargingRed();
+        inputActions.Player.Skill3.canceled += ctx => ReleaseRedAttack();
+        inputActions.Player.Skill4.started += ctx => StartGuardingInput();
+        inputActions.Player.Skill4.canceled += ctx => StopGuardingInput();
+        inputActions.Player.Cast.performed += ctx => PerformCast();
     }
 
     void OnEnable() => inputActions.Enable();
@@ -83,37 +97,304 @@ public class PlayerController : MonoBehaviour
 
     void Update()
     {
-        // 1. GESTIONE STATI DI BLOCCO (Freeze)
-        // Se stiamo attaccando o castando, il movimento WASD è disabilitato.
-        if (isCasting || isAttacking)
+        UpdateMovementAnimation();
+
+        if (currentState == PlayerState.ChargingRed) HandleRedChargeFeedback();
+
+        switch (currentState)
         {
-            ApplyGravity(); // Cadiamo comunque se siamo in aria
-
-            // Opzionale: Permetti di mirare col mouse anche mentre sei fermo?
-            // HandleRotation(); <--- Decommenta se vuoi ruotare mentre casti
-
-            // Forza l'animazione di movimento a 0 (Idle)
-            animator.SetFloat(AnimVelocityZ, 0f);
-            return;
+            case PlayerState.Normal:
+                HandleMovement();
+                HandleRotation();
+                break;
+            case PlayerState.Attacking:
+            case PlayerState.ChargingRed:
+            case PlayerState.GuardingYellow:
+            case PlayerState.CastingSpell:
+                ApplyGravity();
+                HandleRotation();
+                break;
         }
-
-        // 2. COMPORTAMENTO NORMALE
-        HandleMovement();
-        HandleRotation();
     }
 
-    // --- LOGICA MOVIMENTO ---
+    // --- HELPER SPAWN (VFX INCLUSO) ---
+    void SpawnImpactVFX(AttackConfig config, Vector3 position, Quaternion rotation)
+    {
+        if (config.impactVfx != null)
+        {
+            GameObject vfx = Instantiate(config.impactVfx, position, rotation);
+            Destroy(vfx, 2.0f); // Auto-distruzione dopo 2 secondi
+        }
+    }
+
+    GameObject SpawnAttackVisual(AttackConfig config, Color color)
+    {
+        Transform root = (config.originType == AttackOrigin.PlayerCenter) ? visualRoot : castPoint;
+        GameObject obj = Instantiate(config.prefab, root.position, root.rotation);
+
+        var col = obj.GetComponent<Collider>();
+        if (col) col.isTrigger = true;
+
+        obj.transform.SetParent(root);
+        obj.transform.localPosition = new Vector3(0, config.heightOffset, config.forwardOffset);
+        obj.transform.localRotation = Quaternion.identity;
+
+        SetColor(obj, color);
+
+        if (config.screenShake > 0 && impulseSource != null)
+            impulseSource.GenerateImpulse(config.screenShake);
+
+        return obj;
+    }
+
+    void SetColor(GameObject obj, Color c)
+    {
+        var rend = obj.GetComponent<Renderer>();
+        if (rend) rend.material.color = c;
+        foreach (var r in obj.GetComponentsInChildren<Renderer>()) r.material.color = c;
+    }
+
+    // --- ATTACCHI ---
+
+    void PerformGreenAttack()
+    {
+        if (currentState != PlayerState.Normal) return;
+        StartCoroutine(GreenPokeRoutine());
+    }
+
+    IEnumerator GreenPokeRoutine()
+    {
+        currentState = PlayerState.Attacking;
+        spellSystem.PushNote(0);
+        AttackConfig cfg = greenConfig;
+        GameObject poke = SpawnAttackVisual(cfg, Color.green);
+
+        float elapsed = 0;
+        Vector3 startPos = poke.transform.localPosition;
+        Vector3 targetPos = startPos + (Vector3.forward * 1.5f);
+
+        while (elapsed < cfg.duration)
+        {
+            float t = elapsed / cfg.duration;
+            float pingPong = Mathf.PingPong(t * 2, 1);
+            poke.transform.localScale = Vector3.Lerp(cfg.startScale, cfg.endScale, pingPong);
+            poke.transform.localPosition = Vector3.Lerp(startPos, targetPos, pingPong);
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+        Destroy(poke);
+        currentState = PlayerState.Normal;
+    }
+
+    void PerformBlueAttack()
+    {
+        if (currentState != PlayerState.Normal) return;
+        StartCoroutine(BlueSlashRoutine());
+    }
+
+    IEnumerator BlueSlashRoutine()
+    {
+        currentState = PlayerState.Attacking;
+        spellSystem.PushNote(1);
+        AttackConfig cfg = blueConfig;
+        Transform root = (cfg.originType == AttackOrigin.PlayerCenter) ? visualRoot : castPoint;
+
+        GameObject pivot = new GameObject("SlashPivot");
+        pivot.transform.position = root.position;
+        pivot.transform.rotation = root.rotation;
+        pivot.transform.SetParent(root);
+
+        GameObject slash = Instantiate(cfg.prefab, pivot.transform);
+        slash.transform.localPosition = new Vector3(0, cfg.heightOffset, cfg.forwardOffset);
+        slash.transform.localScale = cfg.startScale;
+
+        var col = slash.GetComponent<Collider>();
+        if (col) col.isTrigger = true;
+        SetColor(slash, Color.cyan);
+
+        if (cfg.screenShake > 0 && impulseSource != null) impulseSource.GenerateImpulse(cfg.screenShake);
+
+        float startAngle = 90f;
+        float endAngle = -90f;
+        float elapsed = 0;
+
+        while (elapsed < cfg.duration)
+        {
+            float t = elapsed / cfg.duration;
+            float currentAngle = Mathf.Lerp(startAngle, endAngle, t);
+            pivot.transform.localRotation = Quaternion.Euler(0, currentAngle, 0);
+            slash.transform.localScale = Vector3.Lerp(cfg.startScale, cfg.endScale, Mathf.Sin(t * Mathf.PI));
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+        Destroy(pivot);
+        currentState = PlayerState.Normal;
+    }
+
+    void StartChargingRed()
+    {
+        if (currentState != PlayerState.Normal) return;
+        currentState = PlayerState.ChargingRed;
+        chargeStartTime = Time.time;
+        redChargeReadyFeedbackPlayed = false;
+
+        if (redConfig.chargePrefab != null) activeChargeVFX = Instantiate(redConfig.chargePrefab, castPoint);
+        else
+        {
+            activeChargeVFX = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            DestroyImmediate(activeChargeVFX.GetComponent<Collider>());
+            activeChargeVFX.transform.SetParent(castPoint);
+        }
+        activeChargeVFX.transform.localPosition = Vector3.zero;
+        activeChargeVFX.transform.localScale = Vector3.one * 0.15f;
+        SetColor(activeChargeVFX, new Color(0.5f, 0, 0, 0.5f));
+    }
+
+    void HandleRedChargeFeedback()
+    {
+        if (activeChargeVFX == null) return;
+        float chargeDuration = Time.time - chargeStartTime;
+        activeChargeVFX.transform.localPosition = Random.insideUnitSphere * 0.01f;
+        if (chargeDuration >= minChargeTimeRed && !redChargeReadyFeedbackPlayed)
+        {
+            redChargeReadyFeedbackPlayed = true;
+            SetColor(activeChargeVFX, Color.red);
+            activeChargeVFX.transform.localScale *= 2.0f;
+        }
+    }
+
+    void ReleaseRedAttack()
+    {
+        if (activeChargeVFX != null) Destroy(activeChargeVFX);
+        if (currentState != PlayerState.ChargingRed) return;
+        if (Time.time - chargeStartTime >= minChargeTimeRed) StartCoroutine(RedSmashRoutine());
+        else currentState = PlayerState.Normal;
+    }
+
+    IEnumerator RedSmashRoutine()
+    {
+        spellSystem.PushNote(2);
+        AttackConfig cfg = redConfig;
+        GameObject smash = SpawnAttackVisual(cfg, Color.red);
+
+        float elapsed = 0;
+        Vector3 finalScale = cfg.endScale;
+        Vector3 initialScale = cfg.startScale;
+        bool impactPlayed = false;
+
+        while (elapsed < cfg.duration)
+        {
+            float t = elapsed / cfg.duration;
+            float tEase = t * t;
+            smash.transform.localScale = Vector3.Lerp(initialScale, finalScale, tEase);
+            smash.transform.Translate(Vector3.forward * (Time.deltaTime * 5f), Space.Self);
+
+            // SPAWN VFX DETRITI (Al 90% dell'estensione)
+            if (t > 0.8f && !impactPlayed)
+            {
+                impactPlayed = true;
+                // Spawna alla punta del cilindro
+                Vector3 impactPos = smash.transform.position + (smash.transform.forward * (finalScale.z / 2));
+                // Metti a terra
+                impactPos.y = 0.1f;
+                SpawnImpactVFX(cfg, impactPos, Quaternion.LookRotation(Vector3.up));
+            }
+
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+        Destroy(smash);
+        currentState = PlayerState.Normal;
+    }
+
+    void StartGuardingInput()
+    {
+        if (currentState != PlayerState.Normal) return;
+        guardStartTime = Time.time;
+        currentState = PlayerState.GuardingYellow;
+        AttackConfig cfg = yellowConfig;
+        activeShieldInstance = SpawnAttackVisual(cfg, new Color(1f, 1f, 0f, 0.3f));
+        activeShieldInstance.transform.localScale = cfg.startScale;
+    }
+
+    void StopGuardingInput()
+    {
+        if (currentState != PlayerState.GuardingYellow) return;
+        float duration = Time.time - guardStartTime;
+        if (duration <= tapThresholdYellow) PerformYellowRepel();
+        else spellSystem.PushNote(3);
+        if (activeShieldInstance != null) Destroy(activeShieldInstance);
+        currentState = PlayerState.Normal;
+    }
+
+    void PerformYellowRepel()
+    {
+        spellSystem.PushNote(3);
+
+        // Spawn Onda d'urto alla base
+        AttackConfig cfg = yellowConfig;
+        SpawnImpactVFX(cfg, visualRoot.position + Vector3.up * 0.1f, Quaternion.Euler(90, 0, 0));
+
+        if (activeShieldInstance != null)
+        {
+            activeShieldInstance.transform.SetParent(null);
+            StartCoroutine(ShieldPulseRoutine(activeShieldInstance));
+            activeShieldInstance = null;
+        }
+    }
+
+    IEnumerator ShieldPulseRoutine(GameObject shieldObj)
+    {
+        AttackConfig cfg = yellowConfig;
+        float elapsed = 0;
+        Vector3 start = shieldObj.transform.localScale;
+        if (cfg.screenShake > 0 && impulseSource != null) impulseSource.GenerateImpulse(cfg.screenShake);
+        while (elapsed < 0.15f)
+        {
+            float t = elapsed / 0.15f;
+            shieldObj.transform.localScale = Vector3.Lerp(start, cfg.endScale, t);
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+        Destroy(shieldObj);
+    }
+
+    void UpdateMovementAnimation()
+    {
+        if (animator == null) return;
+        if (currentState != PlayerState.Normal) { animator.SetFloat(AnimVelocityZ, 0f, 0.1f, Time.deltaTime); return; }
+
+        Vector3 inputDir = new Vector3(moveInput.x, 0, moveInput.y);
+        Vector3 localDir = visualRoot.InverseTransformDirection(inputDir);
+        float forwardAmount = localDir.z;
+        if (inputDir.magnitude > 0.1f && Mathf.Abs(forwardAmount) < 0.2f) forwardAmount = 0.5f;
+
+        animator.SetFloat(AnimVelocityZ, forwardAmount, 0.1f, Time.deltaTime);
+    }
+
     void HandleMovement()
     {
         Vector3 move = new Vector3(moveInput.x, 0, moveInput.y);
         if (move.magnitude > 1f) move.Normalize();
         controller.Move(move * moveSpeed * Time.deltaTime);
-
         ApplyGravity();
+    }
 
-        // Calcolo animazione locale (per gestire camminata all'indietro)
-        Vector3 localMove = transform.InverseTransformDirection(move);
-        animator.SetFloat(AnimVelocityZ, localMove.z, 0.1f, Time.deltaTime);
+    void HandleRotation()
+    {
+        if (activeChargeVFX != null)
+            activeChargeVFX.transform.position = castPoint.position + (Random.insideUnitSphere * 0.01f);
+
+        Ray ray = mainCamera.ScreenPointToRay(mousePos);
+        Plane groundPlane = new Plane(Vector3.up, Vector3.zero);
+        if (groundPlane.Raycast(ray, out float enter))
+        {
+            Vector3 hitPoint = ray.GetPoint(enter);
+            Vector3 lookDir = hitPoint - visualRoot.position;
+            lookDir.y = 0;
+            if (lookDir != Vector3.zero)
+                visualRoot.rotation = Quaternion.Slerp(visualRoot.rotation, Quaternion.LookRotation(lookDir), rotationSpeed * Time.deltaTime);
+        }
     }
 
     void ApplyGravity()
@@ -123,107 +404,59 @@ public class PlayerController : MonoBehaviour
         controller.Move(velocity * Time.deltaTime);
     }
 
-    void HandleRotation()
+
+    void PerformCast()
     {
-        Ray ray = mainCamera.ScreenPointToRay(mousePos);
-        Plane groundPlane = new Plane(Vector3.up, Vector3.zero);
-        if (groundPlane.Raycast(ray, out float enter))
-        {
-            Vector3 hitPoint = ray.GetPoint(enter);
-            Vector3 lookDir = hitPoint - transform.position;
-            lookDir.y = 0;
-            if (lookDir != Vector3.zero)
-            {
-                Quaternion targetRot = Quaternion.LookRotation(lookDir);
-                transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, rotationSpeed * Time.deltaTime);
-            }
-        }
-    }
+        // 1. Controlli: Stato e Spell Pronta
+        if (currentState != PlayerState.Normal) return;
 
-    // --- LOGICA COMBAT (MELEE - 1,2,3,4) ---
-    void PerformMeleeAttack(int index)
-    {
-        if (Time.time < nextAttackTime[index]) return;
-        nextAttackTime[index] = Time.time + attackCooldowns[index];
-
-        // Blocca il movimento per un breve istante (Game Feel)
-        StartCoroutine(MeleeLockRoutine(0.4f));
-
-        // Ruota subito verso il nemico
-        HandleRotation();
-
-        // Invia nota e Anima
-        spellSystem.PushNote(index);
-        animator.SetInteger(AnimAttackType, index);
-        animator.SetTrigger(AnimAttack);
-    }
-
-    IEnumerator MeleeLockRoutine(float duration)
-    {
-        isAttacking = true;
-        yield return new WaitForSeconds(duration);
-        isAttacking = false;
-    }
-
-    // --- LOGICA MAGIC (CAST - Spazio) ---
-    void PerformCastAbility()
-    {
-        // Controlla se c'è qualcosa da lanciare PRIMA di bloccare il player
         if (!spellSystem.HasSpellReady())
         {
-            Debug.Log("Nessuna melodia pronta! (Componi una sequenza valida)");
+            Debug.Log("Nessuna spell pronta!");
             return;
         }
 
-        // Entra in stato Cast (Blocca finché l'animazione non finisce)
-        isCasting = true;
+        // 2. Blocca il player
+        currentState = PlayerState.CastingSpell;
 
-        // Ruota verso il bersaglio un'ultima volta
-        HandleRotation();
+        // 3. Avvia Animazione
+        animator.SetTrigger("Cast"); // Assicurati che il trigger nell'Animator si chiami "Cast"
 
-        // Trigger Animazione
-        animator.SetTrigger(AnimCast);
-
-        // NOTA: La spell partirà effettivamente all'evento OnSpellFireFrame
+        // 4. RETE DI SICUREZZA
+        // Se l'animazione non ha l'evento o si blocca, spara comunque dopo 0.4s
+        StartCoroutine(CastSafetyRoutine(0.4f));
     }
 
-    // =========================================================
-    //              ANIMATION EVENTS (Chiamati dall'FBX)
-    // =========================================================
-
-    // 1. MELEE: Chiamato nel momento dell'impatto fisico
-    public void OnAttackHit()
+    // Coroutine di sicurezza
+    IEnumerator CastSafetyRoutine(float delay)
     {
-        int index = animator.GetInteger(AnimAttackType);
+        yield return new WaitForSeconds(delay);
 
-        // Spawn VFX sulla punta del bastone
-        if (skillVfxPrefabs.Length > index && skillVfxPrefabs[index] != null)
+        // Se siamo ancora bloccati nel casting...
+        if (currentState == PlayerState.CastingSpell)
         {
-            var vfx = Instantiate(skillVfxPrefabs[index], meleePoint.position, transform.rotation);
-
-            // Se è lo Scudo (Giallo), lo attacchiamo al bastone/player
-            if (index == 3) vfx.transform.SetParent(meleePoint);
-
-            Destroy(vfx, 2f);
-        }
-
-        // Screen Shake (Solo per attacco Rosso/Pesante)
-        if (index == 2 && impulseSource != null)
-        {
-            impulseSource.GenerateImpulse(0.5f);
+            // Forza il fuoco
+            OnSpellFireFrame();
+            // Aspetta un attimo e sblocca
+            yield return new WaitForSeconds(0.2f);
+            OnCastEndFrame();
         }
     }
 
-    // 2. MAGIC: Chiamato quando il bastone è alto (Climax del Cast)
+    // --- EVENTI DI ANIMAZIONE (Da aggiungere nella clip o chiamati dalla SafetyRoutine) ---
+
     public void OnSpellFireFrame()
     {
-        // Dice al sistema di sparare usando lo SpellOrigin (punto fisso petto)
-        spellSystem.FireCurrentSpell(spellOrigin);
+        // Evita doppi spari
+        if (currentState != PlayerState.CastingSpell) return;
+
+        // Spara usando il castPoint (punta del bastone)
+        spellSystem.FireCurrentSpell(castPoint);
     }
 
-    // 3. MAGIC: Chiamato alla fine dell'animazione di Cast
     public void OnCastEndFrame()
     {
-        isCasting = false; // Sblocca il movimento
+        // Torna normale
+        currentState = PlayerState.Normal;
     }
 }
