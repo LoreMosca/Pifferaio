@@ -1,18 +1,17 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-// --- CONFIGURAZIONI DESIGNER SPECIFICHE ---
-// Queste classi servono solo a tenere l'Inspector ordinato e chiaro.
+// --- CLASSI DI CONFIGURAZIONE PER INSPECTOR ---
 
 [System.Serializable]
 public class ProjectileSettings
 {
     [Header("Bilanciamento Proiettile")]
-    [Tooltip("Danno base all'impatto.")]
+    [Tooltip("Danno o Cura applicato all'impatto.")]
     public float baseDamage = 15f;
-    [Tooltip("Velocità di movimento (metri/sec).")]
+    [Tooltip("Velocità di volo del proiettile.")]
     public float speed = 20f;
-    [Tooltip("Grandezza fisica della sfera.")]
+    [Tooltip("Dimensione visiva della sfera.")]
     public float size = 0.5f;
 }
 
@@ -20,13 +19,13 @@ public class ProjectileSettings
 public class AreaSettings
 {
     [Header("Bilanciamento Area (AoE)")]
-    [Tooltip("Danno o Cura per ogni Tick.")]
+    [Tooltip("Quanto Danno/Cura applica per ogni tick.")]
     public float valuePerTick = 5f;
     [Tooltip("Raggio dell'area in metri.")]
     public float radius = 4f;
-    [Tooltip("Quanto dura la zona a terra (secondi).")]
+    [Tooltip("Durata totale della zona a terra.")]
     public float duration = 5f;
-    [Tooltip("Ogni quanto applica l'effetto (secondi). Basso = Più veloce.")]
+    [Tooltip("Ogni quanti secondi applica l'effetto (Basso = Più frequente).")]
     public float tickInterval = 1.0f;
 }
 
@@ -34,13 +33,13 @@ public class AreaSettings
 public class BeamSettings
 {
     [Header("Bilanciamento Laser (Beam)")]
-    [Tooltip("Danno iniziale al secondo.")]
+    [Tooltip("Danno/Cura al secondo iniziale.")]
     public float startDps = 8f;
     [Tooltip("Lunghezza massima del raggio.")]
     public float maxLength = 10f;
-    [Tooltip("Durata del raggio (secondi).")]
+    [Tooltip("Durata dell'emissione.")]
     public float duration = 3.5f;
-    [Tooltip("Quanto aumenta il danno/cura al secondo (Moltiplicatore).")]
+    [Tooltip("Moltiplicatore di crescita del danno nel tempo.")]
     public float rampUpSpeed = 1.5f;
 }
 
@@ -48,34 +47,37 @@ public class BeamSettings
 public class BuffSettings
 {
     [Header("Bilanciamento Passive")]
-    [Tooltip("Valore del buff (es. % Scudo o Stat).")]
+    [Tooltip("Valore della statistica potenziata.")]
     public float statValue = 20f;
     [Tooltip("Durata del buff sul Pifferaio.")]
     public float duration = 10f;
-    [Tooltip("Chance extra di lootare note rare (0.1 = 10%).")]
+    [Tooltip("Percentuale extra di drop note (0.2 = 20%).")]
     public float lootChance = 0.2f;
 }
 
-// --- DATI DI GIOCO (PAYLOAD) ---
-// Questa è la "scatola" che passiamo al sistema di gioco.
+// --- PAYLOAD (DATI DI GIOCO) ---
+
 [System.Serializable]
 public struct SpellPayload
 {
     public string constructedName;
     public string logicDescription;
 
-    // Tipi
     public SpellEffect effect;
     public SpellForm delivery;
 
-    // Valori finali (Calcolati)
+    // Stats
     public float powerValue;
     public float sizeOrRange;
     public float duration;
-    public float tickRate;
-    public float lootLuckChance;
 
-    // Geometria
+    // Mechanics Specifiche
+    public float moveSpeed;         // Velocità movimento
+    public int burstCount;          // Numero colpi (Verde)
+    public int penetration;         // Numero nemici passanti (Rosso)
+    public float tickRate;          // Frequenza tick (Blu/Verde)
+
+    public float lootLuckChance;
     public List<Vector3> fireDirections;
 }
 
@@ -85,18 +87,13 @@ public enum SpellForm { Projectile, AreaAoE, LinearBeam, SelfBuff }
 public class SpellBuilder : MonoBehaviour
 {
     [Header("--- CONFIGURAZIONE ARCHETIPI ---")]
-    [Space(10)]
     public ProjectileSettings projectile;
-    [Space(5)]
     public AreaSettings area;
-    [Space(5)]
     public BeamSettings beam;
-    [Space(5)]
     public BuffSettings buff;
 
     [Header("--- PROGRESSIONE ---")]
-    [Space(10)]
-    [Tooltip("Moltiplicatore potenza per livello (0.2 = +20% a livello).")]
+    [Tooltip("Moltiplicatore potenza per livello (0.25 = +25%).")]
     public float powerPerLevel = 0.25f;
 
     public SpellPayload BuildSpell(Melody melody)
@@ -104,18 +101,18 @@ public class SpellBuilder : MonoBehaviour
         SpellPayload payload = new SpellPayload();
         List<NoteDefinition> notes = melody.sequence;
 
-        // Default setup
+        // Defaults
         payload.fireDirections = new List<Vector3> { Vector3.forward };
+        payload.burstCount = 1;
+        payload.penetration = 0;
 
         if (notes == null || notes.Count < 2)
         {
-            payload.constructedName = "Melodia Spezzata";
+            payload.constructedName = "Melodia Rotta";
             return payload;
         }
 
-        // --- 1. APPLICAZIONE CONFIGURAZIONE BASE ---
-        // Qui leggiamo i dati dalle classi specifiche dell'Inspector
-
+        // 1. CONFIGURAZIONE BASE (Dal Designer)
         NoteColor formColor = notes[1].color;
         switch (formColor)
         {
@@ -123,11 +120,11 @@ public class SpellBuilder : MonoBehaviour
                 payload.delivery = SpellForm.Projectile;
                 payload.powerValue = projectile.baseDamage;
                 payload.sizeOrRange = projectile.size;
-                payload.duration = 3.0f; // Default safety destruction
-                payload.tickRate = projectile.speed; // Usiamo tickRate per passare la velocità
+                payload.duration = 3.0f; // Safety destroy timer
+                payload.moveSpeed = projectile.speed;
                 break;
 
-            case NoteColor.Blue:   // AREA (AoE)
+            case NoteColor.Blue:   // AREA
                 payload.delivery = SpellForm.AreaAoE;
                 payload.powerValue = area.valuePerTick;
                 payload.sizeOrRange = area.radius;
@@ -135,15 +132,15 @@ public class SpellBuilder : MonoBehaviour
                 payload.tickRate = area.tickInterval;
                 break;
 
-            case NoteColor.Red:    // BEAM (Laser)
+            case NoteColor.Red:    // BEAM
                 payload.delivery = SpellForm.LinearBeam;
                 payload.powerValue = beam.startDps;
                 payload.sizeOrRange = beam.maxLength;
                 payload.duration = beam.duration;
-                payload.tickRate = beam.rampUpSpeed; // Usiamo tickRate per il ramp-up
+                payload.tickRate = beam.rampUpSpeed;
                 break;
 
-            case NoteColor.Yellow: // BUFF (Passiva)
+            case NoteColor.Yellow: // BUFF
                 payload.delivery = SpellForm.SelfBuff;
                 payload.powerValue = buff.statValue;
                 payload.duration = buff.duration;
@@ -151,11 +148,11 @@ public class SpellBuilder : MonoBehaviour
                 break;
         }
 
-        // --- 2. SCALING LIVELLO ---
+        // 2. SCALING LEVEL
         float levelMultiplier = 1.0f + ((melody.level - 1) * powerPerLevel);
         payload.powerValue *= levelMultiplier;
 
-        // --- 3. DEFINIZIONE EFFETTO (RADICE) ---
+        // 3. EFFETTO
         switch (notes[0].color)
         {
             case NoteColor.Green: payload.effect = SpellEffect.Heal; break;
@@ -164,7 +161,7 @@ public class SpellBuilder : MonoBehaviour
             case NoteColor.Yellow: payload.effect = SpellEffect.Shield; break;
         }
 
-        // --- 4. ESTENSIONI ---
+        // 4. ESTENSIONI
         int yellowCount = 0;
         for (int i = 2; i < notes.Count; i++)
         {
@@ -179,8 +176,7 @@ public class SpellBuilder : MonoBehaviour
             }
         }
 
-        // --- 5. COSTRUZIONE NOME E DESCRIZIONE ---
-        payload.constructedName = GenerateName(payload);
+        payload.constructedName = $"{payload.effect} {payload.delivery} Lv.{melody.level}";
         payload.logicDescription = GenerateDesc(payload);
 
         return payload;
@@ -188,36 +184,38 @@ public class SpellBuilder : MonoBehaviour
 
     void ApplyExtension(NoteColor c, ref SpellPayload p)
     {
-        // Logica semplice e universale
         switch (c)
         {
-            case NoteColor.Red:   // + POTENZA
-                p.powerValue *= 1.5f; // +50% Danno/Cura
+            case NoteColor.Red:
+                // Se proiettile -> Perforazione
+                if (p.delivery == SpellForm.Projectile) p.penetration++;
+                // Sempre -> Danno
+                p.powerValue *= 1.5f;
                 break;
 
-            case NoteColor.Blue:  // + SPAZIO / TEMPO
-                p.sizeOrRange *= 1.4f; // +40% Grandezza
-                p.duration += 2.0f;    // +2 Secondi
+            case NoteColor.Blue:
+                // Sempre -> Area e Durata
+                p.sizeOrRange *= 1.4f;
+                p.duration += 2.0f;
                 break;
 
-            case NoteColor.Green: // + VELOCITA'
-                // Se è un proiettile aumenta velocità, se è area riduce tick
-                if (p.delivery == SpellForm.Projectile) p.tickRate *= 1.5f;
-                else if (p.delivery == SpellForm.AreaAoE) p.tickRate *= 0.7f;
-                else if (p.delivery == SpellForm.LinearBeam) p.tickRate += 0.5f; // Ramp up più veloce
+            case NoteColor.Green:
+                // Se proiettile -> Raffica (Burst)
+                if (p.delivery == SpellForm.Projectile)
+                    p.burstCount++;
+                else if (p.delivery == SpellForm.AreaAoE)
+                    p.tickRate *= 0.7f; // Tick più veloce
+                else
+                    p.moveSpeed *= 1.2f; // Fallback generico
                 break;
         }
     }
 
     void ApplyYellowLogic(int count, ref SpellPayload p)
     {
-        if (p.delivery == SpellForm.SelfBuff)
-        {
-            p.lootLuckChance += 0.2f; // Più fortuna
-        }
+        if (p.delivery == SpellForm.SelfBuff) p.lootLuckChance += 0.2f;
         else
         {
-            // Geometria
             if (count == 1) p.fireDirections.Add(Vector3.back);
             else if (count >= 2)
             {
@@ -230,15 +228,11 @@ public class SpellBuilder : MonoBehaviour
         }
     }
 
-    string GenerateName(SpellPayload p)
-    {
-        string geo = p.fireDirections.Count > 1 ? "Multi " : "";
-        if (p.delivery == SpellForm.SelfBuff) return $"Buff {p.effect}";
-        return $"{geo}{p.effect} {p.delivery}";
-    }
-
     string GenerateDesc(SpellPayload p)
     {
-        return $"Pwr: {p.powerValue:F1} | Dur: {p.duration:F1}s | Size: {p.sizeOrRange:F1}";
+        string extra = "";
+        if (p.burstCount > 1) extra += $" | Burst x{p.burstCount}";
+        if (p.penetration > 0) extra += $" | Pierce {p.penetration}";
+        return $"Pwr: {p.powerValue:F1} {extra}";
     }
 }

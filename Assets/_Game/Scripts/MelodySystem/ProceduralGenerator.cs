@@ -4,11 +4,11 @@ using UnityEngine;
 public class ProceduralGenerator : MonoBehaviour
 {
     [Header("Database Note")]
-    [Tooltip("Trascina qui i 4 ScriptableObject delle note (Verde, Blu, Rosso, Giallo).")]
+    [Tooltip("Trascina qui i 4 ScriptableObject delle note.")]
     public List<NoteDefinition> allNotes;
 
     [Header("Regole Tier")]
-    [Tooltip("Configura qui i range di costo per ogni Tier.")]
+    [Tooltip("Configura numero note e costi per tier.")]
     public List<TierRule> tierRules;
 
     [System.Serializable]
@@ -18,81 +18,74 @@ public class ProceduralGenerator : MonoBehaviour
         public int tierLevel;
         public int minCost;
         public int maxCost;
+        [Tooltip("Numero esatto di note per questo Tier (es. T1=2, T2=3).")]
+        public int fixedNoteCount;
     }
 
     void Awake()
     {
-        // AUTO-FIX: Se non hai configurato i Tier nell'Inspector, metto i default del GDD
+        // Auto-fix regole default se mancano
         if (tierRules == null || tierRules.Count == 0)
         {
-            Debug.LogWarning("ProceduralGenerator: TierRules vuote! Carico valori di default.");
             tierRules = new List<TierRule>()
             {
-                new TierRule { label="Comune", tierLevel=1, minCost=2, maxCost=8 },
-                new TierRule { label="Raro", tierLevel=2, minCost=3, maxCost=12 },
-                new TierRule { label="Epico", tierLevel=3, minCost=4, maxCost=14 }, // Adattato per test
-                new TierRule { label="Leggendario", tierLevel=4, minCost=12, maxCost=16 }
+                new TierRule { label="Comune", tierLevel=1, minCost=2, maxCost=8, fixedNoteCount=2 },
+                new TierRule { label="Raro", tierLevel=2, minCost=3, maxCost=12, fixedNoteCount=3 },
+                new TierRule { label="Epico", tierLevel=3, minCost=4, maxCost=14, fixedNoteCount=4 },
+                new TierRule { label="Leggendario", tierLevel=4, minCost=12, maxCost=16, fixedNoteCount=4 }
             };
         }
     }
 
-    public Melody GenerateLoot(int targetTier)
+    /// <summary>
+    /// NUOVO METODO: Genera loot basandosi su una tabella di probabilità.
+    /// </summary>
+    public Melody GenerateLoot(LootTable table)
     {
-        // Controllo di sicurezza sulle Note
-        if (allNotes == null || allNotes.Count == 0)
+        if (table == null)
         {
-            Debug.LogError("ERRORE: Lista 'All Notes' vuota nel ProceduralGenerator! Assegna gli ScriptableObject.");
+            Debug.LogError("LootTable mancante!");
             return null;
         }
+
+        int selectedTier = table.PickRandomTier();
+        return GenerateLoot(selectedTier);
+    }
+
+    // Metodo base (Tier specifico)
+    public Melody GenerateLoot(int targetTier)
+    {
+        if (allNotes == null || allNotes.Count == 0) return null;
 
         Melody melody = new Melody();
         melody.tier = targetTier;
 
-        // Trova la regola o usa default se non trovata
         TierRule rule = tierRules.Find(r => r.tierLevel == targetTier);
-        if (rule.maxCost == 0)
-        {
-            Debug.LogWarning($"Regola Tier {targetTier} non trovata, uso Tier 1 come fallback.");
-            rule = tierRules[0];
-        }
+        if (rule.fixedNoteCount == 0) rule = tierRules[0];
 
         int currentCost = 0;
+        int attempts = 0;
 
-        // 1. Radice e Forma (sempre 2 note minime)
-        AddRandomNote(melody, ref currentCost);
-        AddRandomNote(melody, ref currentCost);
-
-        // 2. Estensioni (riempie fino al range)
-        int safety = 0;
-        // Nota: Aggiunto check (currentCost < rule.minCost) per forzare l'aggiunta se siamo sotto il minimo
-        while ((currentCost < rule.minCost || (currentCost < rule.maxCost && Random.value > 0.5f))
-                && melody.sequence.Count < 4 && safety < 50)
+        while (attempts < 100)
         {
-            NoteDefinition candidate = GetRandomNote();
+            melody.sequence.Clear();
+            currentCost = 0;
 
-            // Possiamo aggiungere la nota senza sforare il massimo?
-            if (currentCost + candidate.complexityCost <= rule.maxCost)
+            for (int i = 0; i < rule.fixedNoteCount; i++)
             {
-                melody.sequence.Add(candidate);
-                currentCost += candidate.complexityCost;
+                var note = GetRandomNote();
+                melody.sequence.Add(note);
+                currentCost += note.complexityCost;
             }
-            else
+
+            if (currentCost >= rule.minCost && currentCost <= rule.maxCost)
             {
-                // Se non entra, proviamo un'altra volta (magari esce una nota costo 1) oppure break se siamo già validi
-                if (currentCost >= rule.minCost) break;
+                melody.spellName = $"Spell T{targetTier}-{Random.Range(100, 999)}";
+                return melody;
             }
-            safety++;
+            attempts++;
         }
-
-        melody.spellName = $"Spell T{targetTier}-{Random.Range(100, 999)}";
         return melody;
-    }
-
-    private void AddRandomNote(Melody m, ref int cost)
-    {
-        var note = GetRandomNote();
-        m.sequence.Add(note);
-        cost += note.complexityCost;
     }
 
     private NoteDefinition GetRandomNote() => allNotes[Random.Range(0, allNotes.Count)];

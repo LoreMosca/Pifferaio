@@ -1,95 +1,108 @@
 using UnityEngine;
+using System.Collections;
 
 public class SpellVisualizer : MonoBehaviour
 {
-    [Header("Primitive Prefabs")]
-    public GameObject projectilePrefab; // Sfera
-    public GameObject areaPrefab;       // Cilindro piatto
-    public GameObject beamPrefab;       // Cubo lungo
+    [Header("--- PREFAB GEOMETRICI (Feedback) ---")]
+    [Tooltip("Prefab Sfera (con script SmartProjectile). Usato per magie dirette.")]
+    public GameObject projectilePrefab;
+    [Tooltip("Prefab Cilindro piatto. Usato per magie ad Area (AoE).")]
+    public GameObject areaPrefab;
+    [Tooltip("Prefab Cubo allungato. Usato per magie Laser (Beam).")]
+    public GameObject beamPrefab;
 
-    [Header("Settings")]
-    public float projectileSpeed = 20f;
-
-    public void VisualizeSpell(SpellPayload payload, Transform caster)
+    /// <summary>
+    /// Metodo principale chiamato dal System per visualizzare la magia.
+    /// </summary>
+    /// <param name="payload">Dati della magia.</param>
+    /// <param name="originPoint">Punto di origine (es. SpellOrigin).</param>
+    public void VisualizeSpell(SpellPayload payload, Transform originPoint)
     {
-        // Determiniamo il colore in base all'EFFETTO (Radice)
+        // Fallback di sicurezza
+        if (originPoint == null) originPoint = transform;
+
         Color spellColor = GetColorFromEffect(payload.effect);
 
         foreach (Vector3 dir in payload.fireDirections)
         {
-            Vector3 worldDir = caster.TransformDirection(dir);
+            // Calcola rotazione mondo basata sull'origine
+            Vector3 worldDir = originPoint.TransformDirection(dir);
             Quaternion rotation = Quaternion.LookRotation(worldDir);
 
             switch (payload.delivery)
             {
                 case SpellForm.Projectile:
-                    SpawnProjectile(caster.position, rotation, spellColor, payload);
+                    // Usa Coroutine per gestire raffiche (es. 3 colpi veloci)
+                    StartCoroutine(SpawnProjectileBurst(originPoint.position, rotation, spellColor, payload));
                     break;
 
                 case SpellForm.AreaAoE:
-                    Vector3 spawnPos = caster.position + (worldDir * 3f);
+                    // L'area spawna 3 metri avanti a terra
+                    Vector3 spawnPos = originPoint.position + (worldDir * 3f);
+                    spawnPos.y = 0.1f;
                     SpawnArea(spawnPos, spellColor, payload);
                     break;
 
                 case SpellForm.LinearBeam:
-                    SpawnBeam(caster, worldDir, spellColor, payload);
+                    SpawnBeam(originPoint, worldDir, spellColor, payload);
                     break;
 
                 case SpellForm.SelfBuff:
-                    // <--- FIX: Ora passiamo la durata corretta
-                    ApplyBuffVisual(caster, spellColor, payload.duration);
+                    ApplyBuffVisual(originPoint.root, spellColor, payload.duration);
                     break;
             }
         }
     }
 
-    void SpawnProjectile(Vector3 pos, Quaternion rot, Color c, SpellPayload p)
+    // --- LOGICA DI SPAWN ---
+
+    IEnumerator SpawnProjectileBurst(Vector3 pos, Quaternion rot, Color c, SpellPayload p)
     {
-        GameObject obj = Instantiate(projectilePrefab, pos, rot);
-        Colorize(obj, c);
+        for (int i = 0; i < p.burstCount; i++)
+        {
+            GameObject obj = Instantiate(projectilePrefab, pos, rot);
+            Colorize(obj, c);
 
-        // Rimuoviamo il vecchio Rigidbody movement se presente, ora ci pensa lo SmartScript
-        Rigidbody rb = obj.GetComponent<Rigidbody>();
-        if (rb) rb.isKinematic = true; // O Destroy(rb);
+            // Inizializza il cervello del proiettile
+            SmartProjectile brain = obj.GetComponent<SmartProjectile>();
+            if (brain == null) brain = obj.AddComponent<SmartProjectile>();
+            brain.Initialize(p);
 
-        // Aggiungiamo il cervello
-        SmartProjectile brain = obj.GetComponent<SmartProjectile>();
-        if (brain == null) brain = obj.AddComponent<SmartProjectile>();
-
-        // Lo inizializziamo con i dati del Payload e la velocità definita nel Builder
-        // Nota: p.tickRate nel Builder conteneva la velocità per i proiettili
-        brain.Initialize(p, p.tickRate);
+            yield return new WaitForSeconds(0.15f); // Ritardo tra i colpi
+        }
     }
 
     void SpawnArea(Vector3 pos, Color c, SpellPayload p)
     {
         GameObject obj = Instantiate(areaPrefab, pos, Quaternion.identity);
         Colorize(obj, c);
+        // Scala l'area in base al range
         obj.transform.localScale = new Vector3(p.sizeOrRange, 0.1f, p.sizeOrRange);
         Destroy(obj, p.duration);
     }
 
-    void SpawnBeam(Transform caster, Vector3 dir, Color c, SpellPayload p)
+    void SpawnBeam(Transform origin, Vector3 dir, Color c, SpellPayload p)
     {
-        GameObject obj = Instantiate(beamPrefab, caster.position, Quaternion.LookRotation(dir));
-        obj.transform.SetParent(caster);
+        // Il beam diventa figlio dell'origine per muoversi col player
+        GameObject obj = Instantiate(beamPrefab, origin.position, Quaternion.LookRotation(dir));
+        obj.transform.SetParent(origin);
         Colorize(obj, c);
-        obj.transform.localScale = new Vector3(0.5f, 0.5f, p.sizeOrRange);
-        obj.transform.localPosition += dir * (p.sizeOrRange / 2f);
+
+        // Scala e posiziona per farlo partire davanti
+        obj.transform.localScale = new Vector3(0.3f, 0.3f, p.sizeOrRange);
+        obj.transform.localPosition += Vector3.forward * (p.sizeOrRange / 2f);
+
         Destroy(obj, p.duration);
     }
 
-    // <--- FIX: Aggiunto parametro 'duration'
-    void ApplyBuffVisual(Transform target, Color c, float duration)
+    void ApplyBuffVisual(Transform targetRoot, Color c, float duration)
     {
-        GameObject aura = Instantiate(areaPrefab, target.position, Quaternion.identity);
-        aura.transform.SetParent(target);
-        aura.transform.localScale = new Vector3(2f, 0.05f, 2f);
-
-        // Rendiamo semitrasparente
-        Color alphaColor = new Color(c.r, c.g, c.b, 0.3f);
-        Colorize(aura, alphaColor);
-
+        // Semplice aura ai piedi
+        Vector3 pos = targetRoot.position;
+        pos.y = 0.1f;
+        GameObject aura = Instantiate(areaPrefab, pos, Quaternion.identity);
+        aura.transform.SetParent(targetRoot);
+        Colorize(aura, new Color(c.r, c.g, c.b, 0.3f)); // Trasparente
         Destroy(aura, duration);
     }
 
@@ -105,7 +118,7 @@ public class SpellVisualizer : MonoBehaviour
         {
             case SpellEffect.Damage: return Color.red;
             case SpellEffect.Heal: return Color.green;
-            case SpellEffect.Slow: return Color.blue;
+            case SpellEffect.Slow: return Color.cyan;
             case SpellEffect.Shield: return Color.yellow;
             default: return Color.white;
         }
