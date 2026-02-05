@@ -82,19 +82,30 @@ public class SmartProjectile : MonoBehaviour
 
     void HitTarget(GameObject hitObj)
     {
-        ApplyEffect(hitObj);
+        IDamageable target = hitObj.GetComponent<IDamageable>();
+        if (target != null)
+        {
+            switch (payload.effect)
+            {
+                case SpellEffect.Damage:
+                    target.TakeDamage(payload.powerValue);
+                    break;
+                case SpellEffect.Heal:
+                    target.Heal(payload.powerValue);
+                    break;
+                case SpellEffect.Shield:
+                    target.AddShield(payload.powerValue);
+                    break;
+                case SpellEffect.Slow:
+                    // Es. 20% slow per 3 secondi
+                    target.ApplySlow(20f, 3f);
+                    break;
+            }
+        }
 
-        // LOGICA PENETRAZIONE
-        if (currentPenetration > 0)
-        {
-            currentPenetration--;
-            Debug.Log($"<color=orange>TRAFITTO!</color> Nemici rimasti da colpire: {currentPenetration}");
-            // Non distruggiamo
-        }
-        else
-        {
-            Destroy(gameObject);
-        }
+        // Logica Penetrazione esistente...
+        if (currentPenetration > 0) { currentPenetration--; }
+        else { Destroy(gameObject); }
     }
 
     void ApplyEffect(GameObject hitObj)

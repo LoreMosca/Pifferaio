@@ -55,6 +55,9 @@ public class PlayerController : MonoBehaviour
     public SpellCasterSystem spellSystem;
     public CinemachineImpulseSource impulseSource;
 
+    [Header("Stato")]
+    public bool isChanneling = false;
+
     // Stati e Variabili interne
     private CharacterController controller;
     private GameInputs inputActions;
@@ -371,14 +374,27 @@ public class PlayerController : MonoBehaviour
 
         animator.SetFloat(AnimVelocityZ, forwardAmount, 0.1f, Time.deltaTime);
     }
+    public void SetChanneling(bool active)
+    {
+        isChanneling = active;
+    }
 
     void HandleMovement()
     {
         Vector3 move = new Vector3(moveInput.x, 0, moveInput.y);
         if (move.magnitude > 1f) move.Normalize();
-        controller.Move(move * moveSpeed * Time.deltaTime);
+
+        // LOGICA RALLENTAMENTO BEAM
+        float currentSpeed = moveSpeed;
+        if (isChanneling)
+        {
+            currentSpeed = moveSpeed * 0.3f; // Rallenta al 30%
+        }
+
+        controller.Move(move * currentSpeed * Time.deltaTime);
         ApplyGravity();
     }
+
 
     void HandleRotation()
     {

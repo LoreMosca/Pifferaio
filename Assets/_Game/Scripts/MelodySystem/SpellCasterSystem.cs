@@ -5,93 +5,73 @@ using System.Linq;
 public class SpellCasterSystem : MonoBehaviour
 {
     [Header("--- DIPENDENZE ---")]
-    [Tooltip("Il componente che costruisce i dati della magia (Danno, Area, ecc).")]
+    [Tooltip("Builder che calcola le statistiche finali della spell.")]
     public SpellBuilder builder;
-    [Tooltip("Il componente che genera magie casuali.")]
+    [Tooltip("Generatore procedurale per creare nuove melodie.")]
     public ProceduralGenerator generator;
-    [Tooltip("Il componente che gestisce gli effetti visivi (VFX).")]
+    [Tooltip("Gestisce la visualizzazione grafica degli attacchi.")]
     public SpellVisualizer visualizer;
 
-    [Header("--- CONFIGURAZIONE NOTE ---")]
-    [Tooltip("Assegna qui i 4 ScriptableObject delle note (Verde, Blu, Rosso, Giallo).")]
+    [Header("--- CONFIGURAZIONE INPUT ---")]
+    [Tooltip("Mappatura tasti -> Note.")]
     public NoteDefinition[] keyMappings;
 
-    [Header("--- DEBUG LOOT TABLES ---")]
-    [Tooltip("Tabella di loot per casse Comuni (Tier 1).")]
+    [Header("--- DEBUG LOOT TABLES (3 Fonti) ---")]
+    [Tooltip("Tabella per casse comuni (Tier bassi frequenti).")]
     public LootTable debugCommonTable;
-    [Tooltip("Tabella di loot per nemici Elite (Tier 2).")]
+    [Tooltip("Tabella per nemici elite.")]
     public LootTable debugEliteTable;
-    [Tooltip("Tabella di loot per Boss (Tier 3).")]
+    [Tooltip("Tabella per Boss (Tier alti frequenti).")]
     public LootTable debugBossTable;
 
-    [Header("--- STATO RUNTIME (Solo Lettura) ---")]
-    [Tooltip("Le magie attualmente imparate dal giocatore.")]
+    [Header("--- STATO RUNTIME ---")]
     [SerializeField] private List<Melody> inventory = new List<Melody>();
-
-    [Tooltip("Le note premute finora in attesa di completare una sequenza.")]
     [SerializeField] private List<NoteDefinition> currentInputQueue = new List<NoteDefinition>();
 
-    // NUOVO: Lista degli indici della coda che corrispondono alla spell pronta (per illuminarli)
+    // Variabili interne per la logica di combo
     private List<int> matchedIndices = new List<int>();
-
-    // Variabili interne
     private const int QUEUE_SIZE = 4;
     private Melody readySpell = null;
 
+    private struct Candidate { public Melody spell; public List<int> indices; public int len; }
+
     void Start()
     {
-        // Auto-collegamento se manca
         if (generator == null) generator = GetComponent<ProceduralGenerator>();
     }
 
-    // --- LOGICA INPUT ---
+    // --- GESTIONE INPUT ---
 
-    /// <summary>
-    /// Chiamato dal PlayerController quando premi 1, 2, 3 o 4.
-    /// </summary>
     public void PushNote(int noteIndex)
     {
         if (noteIndex < 0 || noteIndex >= keyMappings.Length) return;
+        currentInputQueue.Add(keyMappings[noteIndex]);
 
-        NoteDefinition note = keyMappings[noteIndex];
-        currentInputQueue.Add(note);
-
-        // Mantieni la coda corta (ultime 4 note)
-        if (currentInputQueue.Count > QUEUE_SIZE)
+        // Mantiene la coda a dimensione fissa (4)
+        while (currentInputQueue.Count > QUEUE_SIZE)
             currentInputQueue.RemoveAt(0);
 
         CheckForCombinations();
     }
 
-    /// <summary>
-    /// Controlla se una sequenza valida è presente OVUNQUE nella coda.
-    /// </summary>
     void CheckForCombinations()
     {
-        readySpell = null; // Reset
-        matchedIndices.Clear(); // Reset evidenziazione
+        readySpell = null;
+        matchedIndices.Clear();
+        List<Candidate> candidates = new List<Candidate>();
 
-        // Itera su tutte le spell nell'inventario
+        // Cerca pattern nell'inventario
         foreach (var spell in inventory)
         {
             int seqLen = spell.sequence.Count;
             int queueLen = currentInputQueue.Count;
-
-            // Se la coda è più corta della spell, impossibile matchare
             if (queueLen < seqLen) continue;
-
-            // Pattern Matching: Cerca la sequenza della spell dentro la coda input
-            // Esempio: Coda [V, G, R, V] - Spell [G, R]
-            // Iterazione 0: Controllo V, G (No)
-            // Iterazione 1: Controllo G, R (Sì!) -> Match trovato agli indici 1 e 2
 
             for (int startIdx = 0; startIdx <= queueLen - seqLen; startIdx++)
             {
                 bool match = true;
                 for (int k = 0; k < seqLen; k++)
                 {
-                    // startIdx + k è l'indice reale nella queue
-                    // k è l'indice nella sequenza della spell
                     if (currentInputQueue[startIdx + k].color != spell.sequence[k].color)
                     {
                         match = false;
@@ -101,152 +81,157 @@ public class SpellCasterSystem : MonoBehaviour
 
                 if (match)
                 {
-                    // Trovata! Salviamo la spell
-                    readySpell = spell;
-
-                    // Salviamo QUALI indici illuminare
-                    matchedIndices.Clear();
-                    for (int k = 0; k < seqLen; k++)
-                    {
-                        matchedIndices.Add(startIdx + k);
-                    }
-
-                    return; // Fermati alla prima spell valida trovata (o implementa priorità qui)
+                    Candidate c = new Candidate { spell = spell, len = seqLen, indices = new List<int>() };
+                    for (int k = 0; k < seqLen; k++) c.indices.Add(startIdx + k);
+                    candidates.Add(c);
                 }
             }
         }
+
+        // Priorità alla combo più lunga
+        if (candidates.Count > 0)
+        {
+            candidates.Sort((a, b) => b.len.CompareTo(a.len));
+            readySpell = candidates[0].spell;
+            matchedIndices = candidates[0].indices;
+        }
     }
 
-    // --- API PER ALTRI SISTEMI ---
+    // --- METODI PUBBLICI (API per altri script) ---
 
-    public bool HasSpellReady()
-    {
-        return readySpell != null;
-    }
+    public bool HasSpellReady() => readySpell != null;
 
-    public List<NoteDefinition> GetCurrentQueue()
-    {
-        return currentInputQueue;
-    }
+    public List<NoteDefinition> GetCurrentQueue() => currentInputQueue;
 
-    /// <summary>
-    /// Ritorna la lista degli indici (0-3) che devono brillare perché formano una spell valida.
-    /// </summary>
-    public List<int> GetMatchedIndices()
-    {
-        return matchedIndices;
-    }
+    // REINTEGRATO: Serve a FloatingRuneSystem per illuminare le rune
+    public List<int> GetMatchedIndices() => matchedIndices;
 
-    public void FireCurrentSpell(Transform originPoint)
+    public void FireCurrentSpell(Transform defaultOrigin)
     {
         if (readySpell == null) return;
 
-        // 1. Costruisci il payload (Dati di gioco)
+        // Costruisci il payload (include calcolo potenza basato su Livello e Tier)
         SpellPayload payload = builder.BuildSpell(readySpell);
 
-        // 2. Visualizza (Effetti grafici)
-        if (visualizer != null)
+        if (visualizer != null) visualizer.VisualizeSpell(payload, defaultOrigin);
+
+        Debug.Log($"<color=cyan>CAST: {payload.constructedName}</color>");
+
+        // Rimuovi SOLO le note usate dalla combo
+        matchedIndices.Sort((a, b) => b.CompareTo(a)); // Ordine inverso per rimozione sicura
+        foreach (int index in matchedIndices)
         {
-            visualizer.VisualizeSpell(payload, originPoint);
+            if (index < currentInputQueue.Count) currentInputQueue.RemoveAt(index);
         }
 
-        Debug.Log($"<color=cyan>CASTING: {payload.constructedName} (Tier {readySpell.tier})</color>");
-
-        // 3. Resetta dopo il lancio
-        currentInputQueue.Clear();
         matchedIndices.Clear();
         readySpell = null;
+
+        // Ricontrolla subito se le note rimaste formano un'altra combo
+        CheckForCombinations();
     }
 
-    // --- METODI DEBUG (LOOT) ---
+    // --- GESTIONE LOOT & LIVELLAMENTO ---
 
-    public void LootRandom(int tier)
+    /// <summary>
+    /// Chiamato dai pulsanti di debug o dai nemici.
+    /// </summary>
+    public void LootFromTable(string tableType)
     {
-        LootTable table = debugCommonTable;
-        if (tier == 2) table = debugEliteTable;
-        if (tier == 3) table = debugBossTable;
+        if (generator == null) return;
 
-        if (table != null)
+        LootTable selectedTable = null;
+        if (tableType == "Common") selectedTable = debugCommonTable;
+        else if (tableType == "Elite") selectedTable = debugEliteTable;
+        else if (tableType == "Boss") selectedTable = debugBossTable;
+
+        if (selectedTable != null)
         {
-            Melody newSpell = generator.GenerateLoot(table);
-            if (newSpell != null)
+            Melody newMelody = generator.GenerateLoot(selectedTable);
+            if (newMelody != null)
             {
-                inventory.Add(newSpell);
+                AddOrLevelUp(newMelody);
             }
+        }
+    }
+
+    /// <summary>
+    /// Gestisce la logica dei duplicati: se esiste, sale di livello.
+    /// </summary>
+    private void AddOrLevelUp(Melody incomingMelody)
+    {
+        // Cerca se esiste già una melodia con la stessa sequenza esatta
+        Melody existing = inventory.Find(m => m.IsSameSequence(incomingMelody));
+
+        if (existing != null)
+        {
+            // ESISTE: Level Up!
+            existing.level++;
+            Debug.Log($"<color=yellow>LEVEL UP!</color> {existing.spellName} è ora al Livello {existing.level}");
         }
         else
         {
-            // Fallback
-            Melody newSpell = generator.GenerateLoot(tier);
-            if (newSpell != null) inventory.Add(newSpell);
+            // NUOVA: Aggiungi all'inventario
+            incomingMelody.level = 1;
+            inventory.Add(incomingMelody);
+            Debug.Log($"<color=green>NEW SPELL!</color> {incomingMelody.spellName} aggiunto al grimorio.");
         }
     }
 
-    // --- INTERFACCIA DI DEBUG (ON GUI) ---
+    // --- GUI DEBUG ---
+
     void OnGUI()
     {
         GUIStyle st = new GUIStyle(GUI.skin.label) { fontSize = 14, fontStyle = FontStyle.Bold };
         st.normal.textColor = Color.white;
 
-        // --- BOX SINISTRO: STATO SISTEMA ---
+        // BOX INPUT
         GUI.Box(new Rect(10, 10, 300, 200), "SYSTEM STATUS");
-
-        // 1. Coda Note
         string q = "";
-        var visualQueue = new List<NoteDefinition>(currentInputQueue);
-        foreach (var n in visualQueue) q += $"[{n.noteName}] ";
+        foreach (var n in currentInputQueue) q += $"[{n.noteName}] ";
         GUI.Label(new Rect(20, 40, 280, 30), "INPUT: " + q, st);
 
-        // 2. Spell Pronta
         if (readySpell != null)
         {
             st.normal.textColor = Color.green;
-            GUI.Label(new Rect(20, 70, 280, 30), $"READY: {readySpell.spellName}!", st);
-
-            SpellPayload preview = builder.BuildSpell(readySpell);
-            st.fontSize = 12; st.normal.textColor = Color.cyan;
-            GUI.Label(new Rect(20, 95, 280, 40), $"{preview.effect} | {preview.delivery}", st);
+            GUI.Label(new Rect(20, 70, 280, 30), $"READY: {readySpell.spellName} (Lv.{readySpell.level})", st);
         }
         else
         {
-            st.fontSize = 12; st.normal.textColor = Color.gray;
-            GUI.Label(new Rect(20, 70, 280, 30), "(Nessuna combinazione...)", st);
+            st.normal.textColor = Color.gray;
+            GUI.Label(new Rect(20, 70, 280, 30), "Waiting...", st);
         }
 
-        // 3. Pulsanti Loot Rapido
-        if (GUI.Button(new Rect(20, 140, 80, 25), "+ Common")) LootRandom(1);
-        if (GUI.Button(new Rect(110, 140, 80, 25), "+ Elite")) LootRandom(2);
-        if (GUI.Button(new Rect(200, 140, 80, 25), "+ Boss")) LootRandom(3);
+        // PULSANTI LOOT (Usa le tabelle assegnate in inspector)
+        if (GUI.Button(new Rect(20, 140, 90, 30), "Loot Common")) LootFromTable("Common");
+        if (GUI.Button(new Rect(115, 140, 90, 30), "Loot Elite")) LootFromTable("Elite");
+        if (GUI.Button(new Rect(210, 140, 90, 30), "Loot Boss")) LootFromTable("Boss");
 
-        // --- BOX DESTRO: INVENTARIO SPELL ---
-        GUI.Box(new Rect(Screen.width - 260, 10, 250, 400), "GRIMORIO (Inventory)");
+        // GRIMORIO
+        GUI.Box(new Rect(Screen.width - 260, 10, 250, 600), "GRIMORIO");
+        float y = 40;
 
-        float yPos = 40;
-        st.fontSize = 13;
-
-        if (inventory.Count == 0)
+        foreach (var s in inventory)
         {
-            st.normal.textColor = Color.gray;
-            GUI.Label(new Rect(Screen.width - 240, yPos, 230, 20), "Inventario vuoto.", st);
-        }
+            // Colore basato sul Tier (Rarità)
+            if (s.tier == 1) st.normal.textColor = Color.white;       // Comune
+            else if (s.tier == 2) st.normal.textColor = Color.cyan;   // Raro
+            else if (s.tier == 3) st.normal.textColor = Color.yellow; // Epico
+            else st.normal.textColor = new Color(1f, 0.5f, 0f);       // Leggendario (Arancio/Oro)
 
-        foreach (var spell in inventory)
-        {
-            if (spell.tier == 1) st.normal.textColor = Color.white;
-            if (spell.tier == 2) st.normal.textColor = new Color(0.4f, 0.6f, 1f);
-            if (spell.tier >= 3) st.normal.textColor = new Color(1f, 0.6f, 0.2f);
+            // Riga 1: Nome, Tier e Livello
+            GUI.Label(new Rect(Screen.width - 240, y, 230, 20), $"{s.spellName} [T{s.tier}] Lv.{s.level}", st);
 
-            string seq = "";
-            foreach (var n in spell.sequence) seq += n.noteName.Substring(0, 1) + " ";
+            // Riga 2: Sequenza Note (Grigio)
+            string seqString = "";
+            foreach (var n in s.sequence) seqString += n.noteName + " ";
 
-            GUI.Label(new Rect(Screen.width - 240, yPos, 230, 20),
-                $"{spell.spellName} (Lv.{spell.level})", st);
+            GUIStyle smallSt = new GUIStyle(st);
+            smallSt.fontSize = 11;
+            smallSt.normal.textColor = Color.gray;
+            GUI.Label(new Rect(Screen.width - 240, y + 18, 230, 20), seqString, smallSt);
 
-            st.normal.textColor = Color.gray;
-            GUI.Label(new Rect(Screen.width - 240, yPos + 15, 230, 20),
-                $"[{seq}] T:{spell.tier}", st);
-
-            yPos += 40;
+            y += 45;
         }
     }
 }
