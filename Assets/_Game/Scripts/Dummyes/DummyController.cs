@@ -12,26 +12,42 @@ public class DummyController : MonoBehaviour, IDamageable
     public float maxHealth = 1000f;
     public float currentHealth;
     public float currentShield = 0f;
+
+    [Header("--- GHIACCIO & SLOW (Inspector Curato) ---")]
+    [Tooltip("Percentuale di rallentamento attuale.")]
     [Range(0, 100)] public float currentSlowPercent = 0f;
+
+    [Tooltip("Quanto velocemente cala lo slow al secondo (es. 20 = perde 20% al sec).")]
+    public float slowDecayRate = 20f;
+
+    [Tooltip("Durata dello stato di congelamento (Freeze) una volta raggiunto il 100%.")]
+    public float freezeDuration = 3.0f;
+
+    [Tooltip("Stato attuale di congelamento.")]
+    public bool isFrozen = false;
 
     [Header("--- RIFERIMENTI VISUALI ---")]
     public GameObject floatingTextPrefab;
     public Transform popupSpawnPoint;
     public Renderer meshRenderer;
     public DummyStatusUI statusUI;
-
-    [Tooltip("Oggetto figlio (es. Sfera semitrasparente) che appare quando c'è lo scudo.")]
-    public GameObject shieldVisualObject; // <--- NUOVO
+    public GameObject shieldVisualObject;
 
     [Header("--- DPS METER ---")]
     public float combatResetTime = 2.0f;
 
-    // Colori
+    // Variabili interne
     private Color baseColor;
     private Color freezeColor = new Color(0, 1, 1, 1);
     private Coroutine flashRoutine;
+    private float freezeTimer = 0f;
+    private Rigidbody rb;
 
-    // DPS Interni
+    // Variabili per il Reset Posizione
+    private Vector3 startPosition;
+    private Quaternion startRotation;
+
+    // DPS logic
     private float totalDamageDealt = 0;
     private float totalHealingDone = 0;
     private float combatStartTime = 0;
@@ -40,16 +56,14 @@ public class DummyController : MonoBehaviour, IDamageable
 
     void Start()
     {
-        // SETUP VITA INIZIALE
-        if (type == DummyType.Prince)
-        {
-            // Il principe parte ferito per testare le cure
-            currentHealth = maxHealth * 0.2f;
-        }
-        else
-        {
-            currentHealth = maxHealth;
-        }
+        rb = GetComponent<Rigidbody>();
+
+        // Salva posizione originale per il reset
+        startPosition = transform.position;
+        startRotation = transform.rotation;
+
+        if (type == DummyType.Prince) currentHealth = maxHealth * 0.2f;
+        else currentHealth = maxHealth;
 
         if (meshRenderer) baseColor = meshRenderer.material.color;
 
@@ -66,22 +80,20 @@ public class DummyController : MonoBehaviour, IDamageable
         HandleDPSLogic();
         HandleStatusRecovery();
         UpdateVisualColor();
-        UpdateShieldVisual(); // Controlla se mostrare la sfera scudo
+        UpdateShieldVisual();
     }
 
-    // --- INTERFACCIA IDAMAGEABLE CON LOGICA DI TIPO ---
+    // --- IDAMAGEABLE & KNOCKBACK ---
 
     public void TakeDamage(float amount)
     {
-        // I NEMICI prendono danno, IL PRINCIPE NO
-        if (type == DummyType.Prince)
-        {
-            SpawnPopup("0", Color.grey, 3f);
-            return;
-        }
+        if (type == DummyType.Prince) { SpawnPopup("0", Color.grey, 3f); return; }
 
         CheckCombatStart();
         float effectiveDamage = amount;
+
+        // Bonus danno se congelato?
+        if (isFrozen) effectiveDamage *= 1.5f;
 
         if (currentShield > 0)
         {
@@ -103,118 +115,153 @@ public class DummyController : MonoBehaviour, IDamageable
         if (currentHealth <= 0) Die();
     }
 
-    public void Heal(float amount)
+    public void ApplyKnockback(Vector3 force)
     {
-        // IL PRINCIPE si cura, I NEMICI NO
-        if (type == DummyType.Enemy)
+        if (rb != null && !rb.isKinematic)
         {
-            SpawnPopup("0", Color.grey, 3f);
-            return;
+            rb.AddForce(force, ForceMode.Impulse);
         }
-
-        CheckCombatStart();
-        float healAmount = amount;
-        if (currentHealth + amount > maxHealth) healAmount = maxHealth - currentHealth;
-
-        currentHealth += healAmount;
-        totalHealingDone += healAmount;
-
-        SpawnPopup($"+{healAmount:F0} HP", Color.green, 5f);
-        Flash(Color.green);
-        UpdateUI();
-    }
-
-    public void AddShield(float amount)
-    {
-        // SOLO IL PRINCIPE riceve scudi
-        if (type == DummyType.Enemy)
-        {
-            SpawnPopup("0", Color.grey, 3f);
-            return;
-        }
-
-        CheckCombatStart();
-        currentShield += amount;
-        SpawnPopup($"+{amount:F0} SHLD", Color.yellow, 4f);
-        UpdateUI();
     }
 
     public void ApplySlow(float percentage, float duration)
     {
-        // SOLO I NEMICI rallentano
-        if (type == DummyType.Prince)
+        if (type == DummyType.Prince) { SpawnPopup("0", Color.grey, 3f); return; }
+        if (isFrozen) return;
+
+        currentSlowPercent += percentage;
+
+        if (currentSlowPercent >= 100f)
         {
-            SpawnPopup("0", Color.grey, 3f);
-            return;
+            currentSlowPercent = 100f;
+            StartFreeze();
         }
-
-        currentSlowPercent = Mathf.Clamp(currentSlowPercent + percentage, 0, 100);
-
-        if (currentSlowPercent >= 100)
-            SpawnPopup("FREEZE!", Color.cyan, 5f);
         else
+        {
             SpawnPopup($"-{percentage}% SLOW", Color.cyan, 3f);
-
+        }
         UpdateUI();
     }
 
-    // --- LOGICA VISIVA ---
+    // --- STATUS LOGIC ---
 
-    void UpdateUI()
+    void StartFreeze()
     {
-        if (statusUI)
-        {
-            statusUI.UpdateHealth(currentHealth, maxHealth);
-            statusUI.UpdateShield(currentShield, maxHealth);
-            statusUI.UpdateSlow(currentSlowPercent);
-        }
+        isFrozen = true;
+        freezeTimer = freezeDuration;
+        SpawnPopup("FROZEN! ❄", Color.cyan, 5f);
+
+        // Blocca movimento fisico quando congelato
+        if (rb) rb.linearVelocity = Vector3.zero;
     }
 
-    void UpdateShieldVisual()
+    void BreakFreeze()
     {
-        // Attiva la sfera scudo se abbiamo scudo
-        if (shieldVisualObject)
-        {
-            bool shouldBeActive = currentShield > 1f;
-            if (shieldVisualObject.activeSelf != shouldBeActive)
-            {
-                shieldVisualObject.SetActive(shouldBeActive);
-            }
-        }
-    }
-
-    void UpdateVisualColor()
-    {
-        if (!meshRenderer || flashRoutine != null) return;
-
-        if (currentSlowPercent > 0)
-        {
-            float t = currentSlowPercent / 100f;
-            meshRenderer.material.color = Color.Lerp(baseColor, freezeColor, t);
-        }
-        else
-        {
-            meshRenderer.material.color = baseColor;
-        }
+        isFrozen = false;
+        currentSlowPercent = 0f;
+        SpawnPopup("THAWED", Color.white, 3f);
     }
 
     void HandleStatusRecovery()
     {
-        if (currentSlowPercent > 0)
+        if (isFrozen)
         {
-            currentSlowPercent -= 20f * Time.deltaTime;
+            freezeTimer -= Time.deltaTime;
+            if (freezeTimer <= 0) BreakFreeze();
+        }
+        else if (currentSlowPercent > 0)
+        {
+            currentSlowPercent -= slowDecayRate * Time.deltaTime;
             if (currentSlowPercent < 0) currentSlowPercent = 0;
-            UpdateUI();
+        }
+
+        if (currentSlowPercent > 0 || isFrozen) UpdateUI();
+    }
+
+    // --- DPS LOGIC & RESET ---
+
+    void CheckCombatStart()
+    {
+        lastHitTime = Time.time;
+        if (!inCombat)
+        {
+            inCombat = true;
+            combatStartTime = Time.time;
+            totalDamageDealt = 0;
+            totalHealingDone = 0;
         }
     }
 
-    // --- DPS & UTILS (Invariati) ---
-    void CheckCombatStart() { lastHitTime = Time.time; if (!inCombat) { inCombat = true; combatStartTime = Time.time; totalDamageDealt = 0; totalHealingDone = 0; } }
-    void HandleDPSLogic() { if (inCombat && Time.time > lastHitTime + combatResetTime) { inCombat = false; float d = lastHitTime - combatStartTime; if (d < 0.1f) d = 1f; float dps = totalDamageDealt / d; float hps = totalHealingDone / d; string r = ""; if (dps > 0) r += $"DPS: {dps:F1}\n"; if (hps > 0) r += $"HPS: {hps:F1}"; if (r != "") StartCoroutine(ShowReport(r)); } }
+    void HandleDPSLogic()
+    {
+        // Se è passato abbastanza tempo dall'ultimo colpo, chiudi il combattimento
+        if (inCombat && Time.time > lastHitTime + combatResetTime)
+        {
+            inCombat = false;
+
+            // Calcolo DPS
+            float duration = lastHitTime - combatStartTime;
+            if (duration < 0.1f) duration = 1f;
+
+            float dps = totalDamageDealt / duration;
+            float hps = totalHealingDone / duration;
+
+            string report = "";
+            if (dps > 0) report += $"DPS: {dps:F1}\n";
+            if (hps > 0) report += $"HPS: {hps:F1}";
+
+            if (report != "")
+            {
+                StartCoroutine(ShowReport(report));
+            }
+
+            // RESET POSIZIONE (Funzionalità richiesta)
+            ResetPosition();
+        }
+    }
+
+    void ResetPosition()
+    {
+        // Ferma qualsiasi movimento residuo
+        if (rb)
+        {
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+        }
+
+        // Teletrasporta al punto di origine
+        transform.position = startPosition;
+        transform.rotation = startRotation;
+    }
+
+    // --- UTILS ---
+    public void Heal(float amount)
+    {
+        if (type == DummyType.Enemy) { SpawnPopup("0", Color.grey, 3f); return; }
+        CheckCombatStart();
+        float h = Mathf.Min(amount, maxHealth - currentHealth);
+        currentHealth += h; totalHealingDone += h;
+        SpawnPopup($"+{h:F0} HP", Color.green, 5f); Flash(Color.green); UpdateUI();
+    }
+    public void AddShield(float amount)
+    {
+        if (type == DummyType.Enemy) { SpawnPopup("0", Color.grey, 3f); return; }
+        CheckCombatStart(); currentShield += amount; SpawnPopup($"+{amount:F0} SHLD", Color.yellow, 4f); UpdateUI();
+    }
+
+    void UpdateUI() { if (statusUI) { statusUI.UpdateHealth(currentHealth, maxHealth); statusUI.UpdateShield(currentShield, maxHealth); statusUI.UpdateSlow(currentSlowPercent); } }
+    void UpdateShieldVisual() { if (shieldVisualObject) shieldVisualObject.SetActive(currentShield > 1f); }
+    void UpdateVisualColor() { if (!meshRenderer || flashRoutine != null) return; if (isFrozen) meshRenderer.material.color = freezeColor; else if (currentSlowPercent > 0) meshRenderer.material.color = Color.Lerp(baseColor, freezeColor, currentSlowPercent / 100f); else meshRenderer.material.color = baseColor; }
+
     IEnumerator ShowReport(string t) { yield return new WaitForSeconds(0.2f); SpawnPopup("--- REPORT ---", Color.white, 4f); yield return new WaitForSeconds(0.3f); SpawnPopup(t, Color.white, 6f); }
     void SpawnPopup(string t, Color c, float s) { if (!floatingTextPrefab) return; Vector3 p = popupSpawnPoint ? popupSpawnPoint.position : transform.position + Vector3.up * 2f; GameObject o = Instantiate(floatingTextPrefab, p, Quaternion.identity); FloatingText ft = o.GetComponent<FloatingText>(); if (ft) ft.Setup(t, c, s); }
     void Flash(Color c) { if (!meshRenderer) return; if (flashRoutine != null) StopCoroutine(flashRoutine); flashRoutine = StartCoroutine(FlashRoutine(c)); }
     IEnumerator FlashRoutine(Color c) { meshRenderer.material.color = c; yield return new WaitForSeconds(0.1f); flashRoutine = null; UpdateVisualColor(); }
     void Die() { SpawnPopup("DISTRUTTO", Color.grey, 7f); gameObject.SetActive(false); Invoke(nameof(Respawn), 2f); }
-    void Respawn() { gameObject.SetActive(true); if (type == DummyType.Prince) currentHealth = maxHealth * 0.2f; else currentHealth = maxHealth; currentShield = 0; currentSlowPercent = 0; meshRenderer.material.color = baseColor; UpdateUI(); }
+    void Respawn()
+    {
+        gameObject.SetActive(true);
+        ResetPosition(); // Reset anche al respawn
+        if (type == DummyType.Prince) currentHealth = maxHealth * 0.2f; else currentHealth = maxHealth;
+        currentShield = 0; currentSlowPercent = 0; isFrozen = false; meshRenderer.material.color = baseColor; UpdateUI();
+    }
 }
