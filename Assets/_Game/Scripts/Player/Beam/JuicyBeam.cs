@@ -1,5 +1,5 @@
 using UnityEngine;
-using System.Collections.Generic; // Necessario per Dictionary
+using System.Collections.Generic;
 
 [RequireComponent(typeof(BoxCollider))]
 public class JuicyBeam : MonoBehaviour
@@ -15,8 +15,7 @@ public class JuicyBeam : MonoBehaviour
     public LayerMask hitLayers;
     public float visualPenetration = 0.5f;
 
-    [Header("Ramp Up (Crescita Esponenziale)")]
-    [Tooltip("Velocità di crescita del danno se si mantiene il raggio sullo STESSO bersaglio.")]
+    [Header("Ramp Up")]
     public float rampUpSpeed = 0.5f;
 
     private Renderer rend;
@@ -29,8 +28,6 @@ public class JuicyBeam : MonoBehaviour
     private bool isInitialized = false;
 
     private float currentLength;
-
-    // TRACKING BERSAGLI: ID Oggetto -> Numero di Hit Consecutivi
     private Dictionary<int, int> targetConsecutiveHits = new Dictionary<int, int>();
 
     void Awake()
@@ -49,7 +46,7 @@ public class JuicyBeam : MonoBehaviour
         age = 0f;
         isInitialized = true;
 
-        targetConsecutiveHits.Clear(); // Pulisce la memoria
+        targetConsecutiveHits.Clear();
 
         if (rend)
         {
@@ -90,17 +87,13 @@ public class JuicyBeam : MonoBehaviour
 
     void ApplyEffectArea(float tickInterval)
     {
-        // 1. Rileva collisioni attuali
         Collider[] hits = Physics.OverlapBox(transform.position, transform.localScale / 2, transform.rotation, hitLayers);
 
-        // Ordina per distanza (per la logica del Damage Decay sui nemici in fila)
         Vector3 origin = (ownerPlayer != null) ? ownerPlayer.transform.position : transform.position;
         System.Array.Sort(hits, (a, b) => Vector3.Distance(origin, a.transform.position).CompareTo(Vector3.Distance(origin, b.transform.position)));
 
-        // 2. Set per tracciare chi abbiamo colpito in QUESTO tick
         HashSet<int> currentHitIds = new HashSet<int>();
-
-        int hitCount = 0; // Contatore per il Damage Decay (Estensione Rossa)
+        int hitCount = 0;
 
         foreach (var hit in hits)
         {
@@ -109,28 +102,19 @@ public class JuicyBeam : MonoBehaviour
 
             if (isEnemy || isPrince)
             {
-                // A. Identificazione e Tracking
                 GameObject targetObj = hit.gameObject;
                 int targetID = targetObj.GetInstanceID();
                 currentHitIds.Add(targetID);
 
-                // Incrementa contatore hit consecutivi per questo specifico nemico
                 if (!targetConsecutiveHits.ContainsKey(targetID)) targetConsecutiveHits[targetID] = 0;
                 targetConsecutiveHits[targetID]++;
 
-                // B. Calcolo Moltiplicatore Esponenziale (Ramp Up)
-                // Tempo = numero tick * durata tick
                 float timeOnTarget = targetConsecutiveHits[targetID] * tickInterval;
                 float timeMult = 1.0f + (timeOnTarget * timeOnTarget * rampUpSpeed);
-
-                // C. Calcolo Decadimento Distanza (Damage Decay)
                 hitCount++;
                 float distDecay = Mathf.Clamp01(1.0f - ((hitCount - 1) * payload.damageDecay));
-
-                // D. Potenza Finale
                 float finalPower = payload.powerValue * distDecay * timeMult;
 
-                // E. Applica Effetto
                 IDamageable target = hit.GetComponent<IDamageable>();
                 if (target != null)
                 {
@@ -142,28 +126,29 @@ public class JuicyBeam : MonoBehaviour
                         case SpellEffect.Slow: target.ApplySlow(10f, 0.2f); break;
                     }
                 }
+
+                // --- KNOCKBACK CONTINUO ---
+                Rigidbody rb = hit.GetComponent<Rigidbody>();
+                if (rb != null && !rb.isKinematic && payload.knockback > 0)
+                {
+                    // Spinge dal player verso il bersaglio
+                    Vector3 pushDir = (hit.transform.position - origin).normalized;
+                    pushDir.y = 0;
+                    // ForceMode.Force per spinta continua
+                    rb.AddForce(pushDir * payload.knockback * 50f * tickInterval, ForceMode.Force);
+                }
+                // -------------------------
             }
         }
 
-        // 3. LOGICA DI RESET (Cruciale!)
-        // Se un nemico era nella lista ma NON è stato colpito in questo tick, resettalo.
         List<int> idsToRemove = new List<int>();
         foreach (var id in targetConsecutiveHits.Keys)
         {
-            if (!currentHitIds.Contains(id))
-            {
-                idsToRemove.Add(id);
-            }
+            if (!currentHitIds.Contains(id)) idsToRemove.Add(id);
         }
-
-        foreach (var id in idsToRemove)
-        {
-            targetConsecutiveHits.Remove(id);
-            // Debug.Log($"Reset combo su Target ID: {id}");
-        }
+        foreach (var id in idsToRemove) targetConsecutiveHits.Remove(id);
     }
 
-    // --- VISUAL & COLLISION (Invariati) ---
     void CalculateCollision()
     {
         currentLength = payload.sizeOrRange;

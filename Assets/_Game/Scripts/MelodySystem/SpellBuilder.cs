@@ -1,13 +1,13 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-// --- SETTINGS ---
-[System.Serializable] public class ProjectileSettings { public float baseDamage = 15f; public float speed = 20f; public float size = 0.5f; public int basePenetration = 0; }
-[System.Serializable] public class AreaSettings { public float valuePerTick = 5f; public float radius = 4f; public float duration = 5f; public float tickInterval = 1.0f; }
-[System.Serializable] public class BeamSettings { public float startDps = 8f; public float maxLength = 10f; public float duration = 3.5f; public float baseTickRate = 4f; public float damageFalloff = 0.3f; }
+// --- SETTINGS (Knockback Aggiunto) ---
+[System.Serializable] public class ProjectileSettings { public float baseDamage = 15f; public float speed = 20f; public float size = 0.5f; public int basePenetration = 0; public float knockback = 5f; }
+[System.Serializable] public class AreaSettings { public float valuePerTick = 5f; public float radius = 4f; public float duration = 5f; public float tickInterval = 1.0f; public float knockback = 3f; }
+[System.Serializable] public class BeamSettings { public float startDps = 8f; public float maxLength = 10f; public float duration = 3.5f; public float baseTickRate = 4f; public float damageFalloff = 0.3f; public float knockback = 1.5f; }
 [System.Serializable] public class BuffSettings { public float statValue = 20f; public float duration = 10f; public float lootChance = 0.2f; public float baseTickRate = 1.0f; }
 
-// --- PAYLOAD ---
+// --- PAYLOAD (Knockback Aggiunto) ---
 [System.Serializable]
 public struct SpellPayload
 {
@@ -25,6 +25,9 @@ public struct SpellPayload
     public float tickRate;
     public float damageDecay;
     public float lootLuckChance;
+
+    // NUOVO PARAMETRO
+    public float knockback;
 
     public List<Vector3> fireDirections;
 }
@@ -47,11 +50,12 @@ public class SpellBuilder : MonoBehaviour
     public SpellPayload BuildSpell(Melody melody)
     {
         SpellPayload p = new SpellPayload();
-        // Default
+        // Default init
         p.fireDirections = new List<Vector3> { Vector3.forward };
         p.burstCount = 1;
         p.penetration = 0;
         p.damageDecay = 0;
+        p.knockback = 0;
 
         if (melody.sequence == null || melody.sequence.Count < 2)
         {
@@ -68,9 +72,10 @@ public class SpellBuilder : MonoBehaviour
                 p.delivery = SpellForm.Projectile;
                 p.powerValue = projectile.baseDamage;
                 p.sizeOrRange = projectile.size;
-                p.duration = 5.0f; // Lifetime proiettile
+                p.duration = 5.0f;
                 p.moveSpeed = projectile.speed;
                 p.penetration = projectile.basePenetration;
+                p.knockback = projectile.knockback;
                 break;
             case NoteColor.Blue: // Area
                 p.delivery = SpellForm.AreaAoE;
@@ -78,6 +83,7 @@ public class SpellBuilder : MonoBehaviour
                 p.sizeOrRange = area.radius;
                 p.duration = area.duration;
                 p.tickRate = area.tickInterval;
+                p.knockback = area.knockback;
                 break;
             case NoteColor.Red: // Beam
                 p.delivery = SpellForm.LinearBeam;
@@ -86,7 +92,8 @@ public class SpellBuilder : MonoBehaviour
                 p.duration = beam.duration;
                 p.tickRate = beam.baseTickRate;
                 p.damageDecay = beam.damageFalloff;
-                p.penetration = 99; // Infinito (decadimento gestito dallo script)
+                p.penetration = 99;
+                p.knockback = beam.knockback;
                 break;
             case NoteColor.Yellow: // Buff
                 p.delivery = SpellForm.SelfBuff;
@@ -106,10 +113,10 @@ public class SpellBuilder : MonoBehaviour
             case NoteColor.Yellow: p.effect = SpellEffect.Shield; break;
         }
 
-        // 3. CALCOLO POTENZA (Basato sul LIVELLO, non sul Tier)
-        // Livello 1 = 100% potenza. Livello 2 = 120%. Livello 3 = 140%.
+        // 3. CALCOLO POTENZA (Scaling Livello)
         float levelMultiplier = 1.0f + ((melody.level - 1) * powerPerLevel);
         p.powerValue *= levelMultiplier;
+        p.knockback *= levelMultiplier;
 
         // 4. ESTENSIONI (Dalla 3a nota in poi)
         int yellowCount = 0;
@@ -126,7 +133,6 @@ public class SpellBuilder : MonoBehaviour
             }
         }
 
-        // Nome Finale (Include Tier per info rarità e Livello per info potenza)
         p.constructedName = $"{p.effect} {p.delivery} [T{melody.tier}] Lv.{melody.level}";
         return p;
     }
@@ -136,10 +142,10 @@ public class SpellBuilder : MonoBehaviour
         switch (c)
         {
             case NoteColor.Red:
-                // Potenza extra (moltiplicatore aggiuntivo)
                 p.powerValue *= 1.3f;
+                p.knockback *= 1.5f; // Rosso aumenta molto il knockback
                 if (p.delivery == SpellForm.Projectile) p.penetration++;
-                if (p.delivery == SpellForm.LinearBeam) p.damageDecay *= 0.5f; // Smorza meno
+                if (p.delivery == SpellForm.LinearBeam) p.damageDecay *= 0.5f;
                 break;
             case NoteColor.Blue:
                 p.sizeOrRange *= 1.4f;

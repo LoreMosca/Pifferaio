@@ -4,11 +4,10 @@ using System.Collections;
 public class SpellVisualizer : MonoBehaviour
 {
     public GameObject projectilePrefab;
-    public GameObject areaPrefab;
+    public GameObject areaPrefab; // Assicurati che abbia Renderer e SphereCollider
     public GameObject beamPrefab;
 
     [Header("--- CAST POINTS ---")]
-    [Tooltip("IMPORTANTE: Ruota questi punti nell'editor! (Es. Back Y=180)")]
     public Transform castPointForward;
     public Transform castPointBack;
     public Transform castPointLeft;
@@ -19,56 +18,72 @@ public class SpellVisualizer : MonoBehaviour
         if (originPoint == null) originPoint = transform;
         Color spellColor = GetColorFromEffect(payload.effect);
 
+        // --- GESTIONE BUFF ---
         if (payload.delivery == SpellForm.SelfBuff)
         {
-            ApplyBuffVisual(originPoint.root, spellColor, payload.duration);
+            ApplyBuffLogic(originPoint.root, spellColor, payload);
             return;
         }
 
         foreach (Vector3 dir in payload.fireDirections)
         {
-            // 1. Prendi il CastPoint GIÀ RUOTATO
             Transform spawnPoint = GetDirectionalCastPoint(dir, originPoint);
 
-            // 2. Spawn
             switch (payload.delivery)
             {
                 case SpellForm.Projectile:
-                    // Il proiettile usa la rotazione del punto di spawn
                     StartCoroutine(SpawnProjectileBurst(spawnPoint.position, spawnPoint.rotation, spellColor, payload));
                     break;
 
                 case SpellForm.AreaAoE:
-                    Vector3 areaPos = spawnPoint.position + (spawnPoint.forward * 3f);
+                    Vector3 areaPos = spawnPoint.position + (spawnPoint.forward * 4f);
                     areaPos.y = 0.1f;
-                    SpawnArea(areaPos, spellColor, payload);
+                    SpawnAreaLogic(areaPos, spellColor, payload);
                     break;
 
                 case SpellForm.LinearBeam:
-                    // Il beam diventa figlio e resetta la rotazione
                     SpawnBeam(spawnPoint, spellColor, payload, originPoint);
                     break;
             }
         }
     }
 
+    // --- METODI DI SPAWN LOGICA ---
+
+    void SpawnAreaLogic(Vector3 pos, Color c, SpellPayload p)
+    {
+        GameObject obj = Instantiate(areaPrefab, pos, Quaternion.identity);
+
+        // Collega Script Logica Area
+        SpellAreaEffect areaScript = obj.GetComponent<SpellAreaEffect>();
+        if (areaScript == null) areaScript = obj.AddComponent<SpellAreaEffect>();
+
+        areaScript.Initialize(p, c);
+    }
+
+    void ApplyBuffLogic(Transform target, Color c, SpellPayload p)
+    {
+        // Usa areaPrefab come aura temporanea
+        GameObject obj = Instantiate(areaPrefab, target.position, Quaternion.identity);
+
+        // Collega Script Logica Buff
+        SpellBuffEffect buffScript = obj.GetComponent<SpellBuffEffect>();
+        if (buffScript == null) buffScript = obj.AddComponent<SpellBuffEffect>();
+
+        buffScript.Initialize(target, p, c);
+    }
+
     void SpawnBeam(Transform parentPoint, Color c, SpellPayload p, Transform owner)
     {
-        // 1. Istanzia
         GameObject obj = Instantiate(beamPrefab, parentPoint.position, parentPoint.rotation);
-
-        // 2. Rendi Figlio
         obj.transform.SetParent(parentPoint);
-
-        // 3. RESETTA LOCALI (Fondamentale!)
-        // Dicendogli "LocalRotation = 0", lui si gira esattamente come il padre.
-        // Se il padre è ruotato indietro, lui guarda indietro.
         obj.transform.localPosition = Vector3.zero;
         obj.transform.localRotation = Quaternion.identity;
 
         JuicyBeam juice = obj.GetComponent<JuicyBeam>();
         if (juice == null) juice = obj.AddComponent<JuicyBeam>();
 
+        // Trova il PlayerController per il channeling
         PlayerController pc = owner.GetComponentInParent<PlayerController>();
         if (pc == null) pc = owner.GetComponent<PlayerController>();
 
@@ -77,7 +92,6 @@ public class SpellVisualizer : MonoBehaviour
 
     Transform GetDirectionalCastPoint(Vector3 dir, Transform defaultOrigin)
     {
-        // Usa il Dot Product per capire quale cast point approssima meglio la direzione richiesta
         if (Vector3.Dot(dir, Vector3.forward) > 0.9f) return castPointForward ? castPointForward : defaultOrigin;
         if (Vector3.Dot(dir, Vector3.back) > 0.9f) return castPointBack ? castPointBack : defaultOrigin;
         if (Vector3.Dot(dir, Vector3.left) > 0.9f) return castPointLeft ? castPointLeft : defaultOrigin;
@@ -85,10 +99,8 @@ public class SpellVisualizer : MonoBehaviour
         return defaultOrigin;
     }
 
-    // --- Helper (Invariati) ---
     IEnumerator SpawnProjectileBurst(Vector3 pos, Quaternion rot, Color c, SpellPayload p) { for (int i = 0; i < p.burstCount; i++) { GameObject obj = Instantiate(projectilePrefab, pos, rot); Colorize(obj, c); SmartProjectile brain = obj.GetComponent<SmartProjectile>(); if (brain == null) brain = obj.AddComponent<SmartProjectile>(); brain.Initialize(p); yield return new WaitForSeconds(0.15f); } }
-    void SpawnArea(Vector3 pos, Color c, SpellPayload p) { GameObject obj = Instantiate(areaPrefab, pos, Quaternion.identity); Colorize(obj, c); obj.transform.localScale = new Vector3(p.sizeOrRange, 0.1f, p.sizeOrRange); Destroy(obj, p.duration); }
-    void ApplyBuffVisual(Transform targetRoot, Color c, float duration) { Vector3 pos = targetRoot.position; pos.y = 0.1f; GameObject aura = Instantiate(areaPrefab, pos, Quaternion.identity); aura.transform.SetParent(targetRoot); Colorize(aura, new Color(c.r, c.g, c.b, 0.3f)); Destroy(aura, duration); }
+
     void Colorize(GameObject obj, Color c) { var rend = obj.GetComponent<Renderer>(); if (rend) rend.material.color = c; }
     Color GetColorFromEffect(SpellEffect effect) { switch (effect) { case SpellEffect.Damage: return Color.red; case SpellEffect.Heal: return Color.green; case SpellEffect.Slow: return Color.cyan; case SpellEffect.Shield: return Color.yellow; default: return Color.white; } }
 }

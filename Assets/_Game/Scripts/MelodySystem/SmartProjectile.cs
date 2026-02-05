@@ -3,11 +3,8 @@
 public class SmartProjectile : MonoBehaviour
 {
     [Header("Settings Movimento")]
-    [Tooltip("Velocità di rotazione per l'inseguimento.")]
     public float turnSpeed = 20f;
-    [Tooltip("Distanza minima per esplosione garantita.")]
     public float hitThreshold = 1.5f;
-    [Tooltip("Sotto questa distanza va dritto ignorando la curva.")]
     public float terminalDistance = 5f;
 
     private string targetTag;
@@ -20,7 +17,7 @@ public class SmartProjectile : MonoBehaviour
     public void Initialize(SpellPayload data)
     {
         payload = data;
-        currentPenetration = data.penetration; // Carica dal payload
+        currentPenetration = data.penetration;
         isInitialized = true;
 
         if (payload.effect == SpellEffect.Heal || payload.effect == SpellEffect.Shield)
@@ -42,7 +39,7 @@ public class SmartProjectile : MonoBehaviour
     {
         if (!isInitialized) return;
 
-        float speed = payload.moveSpeed; // Velocità corretta
+        float speed = payload.moveSpeed;
 
         if (target != null)
         {
@@ -87,32 +84,34 @@ public class SmartProjectile : MonoBehaviour
         {
             switch (payload.effect)
             {
-                case SpellEffect.Damage:
-                    target.TakeDamage(payload.powerValue);
-                    break;
-                case SpellEffect.Heal:
-                    target.Heal(payload.powerValue);
-                    break;
-                case SpellEffect.Shield:
-                    target.AddShield(payload.powerValue);
-                    break;
-                case SpellEffect.Slow:
-                    // Es. 20% slow per 3 secondi
-                    target.ApplySlow(20f, 3f);
-                    break;
+                case SpellEffect.Damage: target.TakeDamage(payload.powerValue); break;
+                case SpellEffect.Heal: target.Heal(payload.powerValue); break;
+                case SpellEffect.Shield: target.AddShield(payload.powerValue); break;
+                case SpellEffect.Slow: target.ApplySlow(20f, 3f); break;
             }
         }
 
-        // Logica Penetrazione esistente...
+        // --- KNOCKBACK AGGIUNTO ---
+        Rigidbody rb = hitObj.GetComponent<Rigidbody>();
+        if (rb != null && !rb.isKinematic && payload.knockback > 0)
+        {
+            // Spinge nella direzione del proiettile
+            Vector3 pushDir = transform.forward;
+            pushDir.y = 0.2f;
+            rb.AddForce(pushDir.normalized * payload.knockback, ForceMode.Impulse);
+        }
+        // -------------------------
+
+        ApplyEffectLog(hitObj);
+
         if (currentPenetration > 0) { currentPenetration--; }
         else { Destroy(gameObject); }
     }
 
-    void ApplyEffect(GameObject hitObj)
+    void ApplyEffectLog(GameObject hitObj)
     {
         string tName = hitObj.name;
         float val = payload.powerValue;
-
         switch (payload.effect)
         {
             case SpellEffect.Heal: Debug.Log($"<color=green>✚ HEAL</color> {tName} (+{val:F1})"); break;
