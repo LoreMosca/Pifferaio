@@ -1,5 +1,6 @@
 using UnityEngine;
 using System.Collections;
+using System;
 
 public class PlayerStats : MonoBehaviour, IDamageable
 {
@@ -15,11 +16,23 @@ public class PlayerStats : MonoBehaviour, IDamageable
     public float exhaustionDuration = 2.0f;
 
     [Header("--- STATI ---")]
-    public bool isExhausted = false; // Se true, sei rallentato e non puoi attaccare
-    public bool isShielded = false; // Gestito dal PlayerController (Giallo)
+    public bool isExhausted = false;
+    public bool isShielded = false;
 
-    // Eventi per aggiornare la UI
-    public System.Action OnStatsChanged;
+    // --- NUOVO: MOLTIPLICATORI BUFF ---
+    [Header("--- MODIFICATORI BUFF ---")]
+    public float damageMultiplier = 1.0f; // 1.0 = 100% (Normale)
+    public float speedMultiplier = 1.0f;  // 1.0 = 100% (Normale)
+
+    [Header("--- FEEDBACK VISIVO ---")]
+    [Tooltip("Assegna qui il prefab PF_FloatingText per vedere i danni.")]
+    public GameObject floatingTextPrefab;
+    [Tooltip("Punto sopra la testa dove spawnare il testo.")]
+    public Transform popupSpawnPoint;
+
+    // Eventi
+    public Action OnStatsChanged;
+    public Action OnTakeDamage; // Usato dal Controller per il Camera Shake
 
     private float regenTimer = 0f;
 
@@ -37,25 +50,24 @@ public class PlayerStats : MonoBehaviour, IDamageable
 
     void HandleStaminaRegen()
     {
-        // Se siamo esausti, aspettiamo che finisca il timer
         if (isExhausted)
         {
             regenTimer -= Time.deltaTime;
             if (regenTimer <= 0)
             {
-                isExhausted = false; // Recupero completato
+                isExhausted = false;
+                Debug.Log("<color=green>STAMINA RECUPERATA!</color>");
                 OnStatsChanged?.Invoke();
             }
-            return;
         }
-
-        // Rigenerazione normale se non stiamo spendendo stamina (controllato esternamente o implicitamente)
-        // Nota: Il PlayerController bloccherà la regen se sta tenendo premuto lo scudo
-        if (currentStamina < maxStamina)
+        else
         {
-            currentStamina += staminaRegenRate * Time.deltaTime;
-            if (currentStamina > maxStamina) currentStamina = maxStamina;
-            OnStatsChanged?.Invoke();
+            if (currentStamina < maxStamina)
+            {
+                currentStamina += staminaRegenRate * Time.deltaTime;
+                if (currentStamina > maxStamina) currentStamina = maxStamina;
+                OnStatsChanged?.Invoke();
+            }
         }
     }
 
@@ -71,14 +83,11 @@ public class PlayerStats : MonoBehaviour, IDamageable
         if (isExhausted) return;
 
         currentStamina -= amount;
-
-        // Se andiamo a 0 o sotto zero (Overdraw)
         if (currentStamina <= 0)
         {
-            currentStamina = 0; // Clampa a 0
-            StartExhaustion();  // Triggera lo stato grigio/lento
+            currentStamina = 0;
+            StartExhaustion();
         }
-
         OnStatsChanged?.Invoke();
     }
 
@@ -99,24 +108,27 @@ public class PlayerStats : MonoBehaviour, IDamageable
     {
         isExhausted = true;
         regenTimer = exhaustionDuration;
-        Debug.Log("<color=red>PLAYER ESAUSTO!</color>");
-        // Qui potresti suonare un audio di respiro affannoso
+        SpawnPopup("ESAUSTO!", Color.gray);
     }
 
-    // --- INTERFACCIA IDAMAGEABLE (Per i nemici) ---
+    // --- INTERFACCIA IDAMAGEABLE ---
 
     public void TakeDamage(float amount)
     {
         if (isShielded)
         {
-            // Se scudato, il danno scala dalla stamina invece che dalla vita!
-            float staminaDmg = amount * 0.5f; // Esempio: para il danno costa metà in stamina
+            float staminaDmg = amount * 0.5f;
             ConsumeStamina(staminaDmg);
-            Debug.Log("Danno parato con Stamina!");
+            SpawnPopup("PARATO!", Color.yellow);
             return;
         }
 
         currentHealth -= amount;
+
+        // FEEDBACK: Numeri rossi + Evento Shake
+        SpawnPopup($"-{amount:F0}", Color.red);
+        OnTakeDamage?.Invoke();
+
         if (currentHealth <= 0)
         {
             currentHealth = 0;
@@ -127,17 +139,39 @@ public class PlayerStats : MonoBehaviour, IDamageable
 
     public void Heal(float amount)
     {
-        currentHealth += amount;
-        if (currentHealth > maxHealth) currentHealth = maxHealth;
+        float effectiveHeal = Mathf.Min(amount, maxHealth - currentHealth);
+        currentHealth += effectiveHeal;
+
+        if (effectiveHeal > 0)
+            SpawnPopup($"+{effectiveHeal:F0}", Color.green);
+
         OnStatsChanged?.Invoke();
     }
 
-    public void AddShield(float amount) { } // Gestito diversamente, o implementabile se vuoi scudi extra
-    public void ApplySlow(float percentage, float duration) { } // Implementare se i nemici ti rallentano
+    public void AddShield(float amount)
+    {
+        // CORREZIONE: Era Color.cyan (Blu), ora è Color.yellow (Giallo) come le note
+        SpawnPopup($"+{amount:F0} SHIELD", Color.yellow);
+    }
+
+    public void ApplySlow(float percentage, float duration) { }
 
     void Die()
     {
         Debug.Log("PLAYER MORTO");
-        // Logica Game Over
+        SpawnPopup("MORTO", Color.black);
+    }
+
+    // --- HELPER POPUP ---
+    public void SpawnPopup(string text, Color color)
+    {
+        if (floatingTextPrefab)
+        {
+            Vector3 pos = popupSpawnPoint ? popupSpawnPoint.position : transform.position + Vector3.up * 2f;
+            GameObject obj = Instantiate(floatingTextPrefab, pos, Quaternion.identity);
+            var ft = obj.GetComponent<FloatingText>();
+            // Usiamo size 4f come default ben visibile
+            if (ft) ft.Setup(text, color, 4f);
+        }
     }
 }

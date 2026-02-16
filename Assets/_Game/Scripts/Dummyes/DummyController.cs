@@ -1,29 +1,36 @@
 ﻿using UnityEngine;
 using System.Collections;
+using System; // Necessario per Action
 
 public class DummyController : MonoBehaviour, IDamageable
 {
     public enum DummyType { Enemy, Prince }
 
-    [Header("--- CONFIGURAZIONE ---")]
+    [Header("--- CONFIGURAZIONE BASE ---")]
+    [Tooltip("Tipo di entità (Nemico o Principe da difendere).")]
     public DummyType type = DummyType.Enemy;
 
-    [Header("--- STATS ---")]
+    [Tooltip("Se TRUE, respawna dopo la morte (utile per test). Se FALSE viene distrutto.")]
+    public bool autoRespawn = false;
+
+    [Tooltip("Se VERO: Abilita logiche DPS/HPS e Reset posizione. Se FALSO: Nemico standard.")]
+    public bool isTrainingDummy = false;
+
+    [Header("--- PROGRESSIONE (Livelli) ---")]
+    [SerializeField] private int level = 1;
+
+    [Header("--- STATISTICHE ---")]
     public float maxHealth = 1000f;
     public float currentHealth;
     public float currentShield = 0f;
 
-    [Header("--- GHIACCIO & SLOW (Inspector Curato) ---")]
-    [Tooltip("Percentuale di rallentamento attuale.")]
+    // EVENTO MORTE: Passa (Posizione, Livello)
+    public Action<Vector3, int> OnDeath;
+
+    [Header("--- STATI ALTERATI (Ghiaccio & Slow) ---")]
     [Range(0, 100)] public float currentSlowPercent = 0f;
-
-    [Tooltip("Quanto velocemente cala lo slow al secondo (es. 20 = perde 20% al sec).")]
     public float slowDecayRate = 20f;
-
-    [Tooltip("Durata dello stato di congelamento (Freeze) una volta raggiunto il 100%.")]
     public float freezeDuration = 3.0f;
-
-    [Tooltip("Stato attuale di congelamento.")]
     public bool isFrozen = false;
 
     [Header("--- RIFERIMENTI VISUALI ---")]
@@ -33,68 +40,109 @@ public class DummyController : MonoBehaviour, IDamageable
     public DummyStatusUI statusUI;
     public GameObject shieldVisualObject;
 
-    [Header("--- DPS METER ---")]
+    [Header("--- CONFIGURAZIONE DPS (Solo Training) ---")]
     public float combatResetTime = 2.0f;
 
-    // Variabili interne
+    // Variabili interne Private
     private Color baseColor;
     private Color freezeColor = new Color(0, 1, 1, 1);
     private Coroutine flashRoutine;
     private float freezeTimer = 0f;
     private Rigidbody rb;
-
-    // Variabili per il Reset Posizione
     private Vector3 startPosition;
     private Quaternion startRotation;
 
-    // DPS logic
+    // Variabili DPS
     private float totalDamageDealt = 0;
     private float totalHealingDone = 0;
     private float combatStartTime = 0;
     private float lastHitTime = 0;
     private bool inCombat = false;
 
-    void Start()
+    void Awake()
     {
         rb = GetComponent<Rigidbody>();
+        if (meshRenderer) baseColor = meshRenderer.material.color;
+    }
 
-        // Salva posizione originale per il reset
+    void Start()
+    {
         startPosition = transform.position;
         startRotation = transform.rotation;
 
-        if (type == DummyType.Prince) currentHealth = maxHealth * 0.2f;
-        else currentHealth = maxHealth;
-
-        if (meshRenderer) baseColor = meshRenderer.material.color;
-
-        if (type == DummyType.Enemy) gameObject.tag = "Nemico";
-        else gameObject.tag = "Principe";
+        // Imposta Tag e Vita Iniziale
+        if (type == DummyType.Prince)
+        {
+            currentHealth = maxHealth * 0.2f; // Principe parte ferito
+            gameObject.tag = "Principe";
+        }
+        else
+        {
+            // Se currentHealth è 0, inizializza al massimo. Altrimenti tieni valore impostato (es. da SetLevel)
+            if (currentHealth <= 0) currentHealth = maxHealth;
+            gameObject.tag = "Nemico";
+        }
 
         if (shieldVisualObject) shieldVisualObject.SetActive(false);
 
         UpdateUI();
     }
 
+    // ----------------------------------------------------------------------
+    // METODO DI INIZIALIZZAZIONE LIVELLO (Chiamato dall'HordeManager)
+    // ----------------------------------------------------------------------
+    public void InitializeLevel(int newLevel, LevelingConfig config)
+    {
+        level = newLevel;
+
+        // 1. Applica Scaling HP
+        float hpMult = 1.0f + ((level - 1) * config.hpPerLevel);
+        maxHealth *= hpMult;
+        currentHealth = maxHealth;
+
+        // 2. Applica Scaling Grandezza (Visuale)
+        float scaleMult = 1.0f + ((level - 1) * config.scalePerLevel);
+        transform.localScale = Vector3.one * scaleMult;
+
+        // 3. Applica Colore da Gradiente (Visuale)
+        // Normalizziamo il livello su una scala 0-10 (Livello 1=0, Livello 11+=1)
+        float t = Mathf.Clamp01((level - 1) / 10f);
+        Color levelColor = config.levelColorGradient.Evaluate(t);
+
+        if (meshRenderer)
+        {
+            baseColor = levelColor;
+            meshRenderer.material.color = baseColor;
+        }
+
+        UpdateUI();
+    }
+
     void Update()
     {
-        HandleDPSLogic();
+        // Logica DPS solo se è un Training Dummy
+        if (isTrainingDummy) HandleDPSLogic();
+
         HandleStatusRecovery();
         UpdateVisualColor();
         UpdateShieldVisual();
     }
 
-    // --- IDAMAGEABLE & KNOCKBACK ---
-
+    // ----------------------------------------------------------------------
+    // INTERFACCIA IDAMAGEABLE
+    // ----------------------------------------------------------------------
     public void TakeDamage(float amount)
     {
         if (type == DummyType.Prince) { SpawnPopup("0", Color.grey, 3f); return; }
 
-        CheckCombatStart();
+        if (isTrainingDummy) CheckCombatStart();
+
         float effectiveDamage = amount;
 
-        // Bonus danno se congelato?
+        // Bonus danno su nemici congelati
         if (isFrozen) effectiveDamage *= 1.5f;
 
+        // Assorbimento Scudo
         if (currentShield > 0)
         {
             float shieldAbsorb = Mathf.Min(currentShield, amount);
@@ -103,29 +151,46 @@ public class DummyController : MonoBehaviour, IDamageable
             SpawnPopup($"-{shieldAbsorb:F0} SHLD", Color.yellow, 3f);
         }
 
+        // Danno effettivo
         if (effectiveDamage > 0)
         {
             currentHealth -= effectiveDamage;
-            totalDamageDealt += effectiveDamage;
+            if (isTrainingDummy) totalDamageDealt += effectiveDamage;
+
             SpawnPopup($"-{effectiveDamage:F0}", Color.red, 5f);
-            Flash(Color.red);
+            Flash(Color.white); // Flash bianco classico
         }
 
         UpdateUI();
         if (currentHealth <= 0) Die();
     }
 
-    public void ApplyKnockback(Vector3 force)
+    public void Heal(float amount)
     {
-        if (rb != null && !rb.isKinematic)
-        {
-            rb.AddForce(force, ForceMode.Impulse);
-        }
+        if (type == DummyType.Enemy) return; // I nemici non si curano di solito
+
+        if (isTrainingDummy) CheckCombatStart();
+
+        float healAmount = Mathf.Min(amount, maxHealth - currentHealth);
+        currentHealth += healAmount;
+        if (isTrainingDummy) totalHealingDone += healAmount;
+
+        SpawnPopup($"+{healAmount:F0} HP", Color.green, 5f);
+        UpdateUI();
+    }
+
+    public void AddShield(float amount)
+    {
+        if (type == DummyType.Enemy) return;
+
+        currentShield += amount;
+        SpawnPopup($"+{amount:F0} SHLD", Color.yellow, 4f);
+        UpdateUI();
     }
 
     public void ApplySlow(float percentage, float duration)
     {
-        if (type == DummyType.Prince) { SpawnPopup("0", Color.grey, 3f); return; }
+        if (type == DummyType.Prince) return;
         if (isFrozen) return;
 
         currentSlowPercent += percentage;
@@ -137,20 +202,27 @@ public class DummyController : MonoBehaviour, IDamageable
         }
         else
         {
-            SpawnPopup($"-{percentage}% SLOW", Color.cyan, 3f);
+            SpawnPopup($"-{percentage}% SPD", Color.cyan, 3f);
         }
         UpdateUI();
     }
 
-    // --- STATUS LOGIC ---
+    public void ApplyKnockback(Vector3 force)
+    {
+        if (rb != null && !rb.isKinematic)
+        {
+            rb.AddForce(force, ForceMode.Impulse);
+        }
+    }
 
+    // ----------------------------------------------------------------------
+    // STATI E MORTE
+    // ----------------------------------------------------------------------
     void StartFreeze()
     {
         isFrozen = true;
         freezeTimer = freezeDuration;
         SpawnPopup("FROZEN! ❄", Color.cyan, 5f);
-
-        // Blocca movimento fisico quando congelato
         if (rb) rb.linearVelocity = Vector3.zero;
     }
 
@@ -177,91 +249,83 @@ public class DummyController : MonoBehaviour, IDamageable
         if (currentSlowPercent > 0 || isFrozen) UpdateUI();
     }
 
-    // --- DPS LOGIC & RESET ---
-
-    void CheckCombatStart()
+    void Die()
     {
-        lastHitTime = Time.time;
-        if (!inCombat)
+        // Notifica l'HordeManager passando Posizione e Livello
+        OnDeath?.Invoke(transform.position, level);
+
+        SpawnPopup("DISTRUTTO", Color.grey, 7f);
+        gameObject.SetActive(false);
+
+        if (autoRespawn)
         {
-            inCombat = true;
-            combatStartTime = Time.time;
-            totalDamageDealt = 0;
-            totalHealingDone = 0;
+            Invoke(nameof(Respawn), 2f);
+        }
+        else
+        {
+            Destroy(gameObject, 0.1f);
         }
     }
 
-    void HandleDPSLogic()
+    // ----------------------------------------------------------------------
+    // UTILITIES & VISUALS
+    // ----------------------------------------------------------------------
+    void UpdateUI()
     {
-        // Se è passato abbastanza tempo dall'ultimo colpo, chiudi il combattimento
-        if (inCombat && Time.time > lastHitTime + combatResetTime)
+        if (statusUI)
         {
-            inCombat = false;
-
-            // Calcolo DPS
-            float duration = lastHitTime - combatStartTime;
-            if (duration < 0.1f) duration = 1f;
-
-            float dps = totalDamageDealt / duration;
-            float hps = totalHealingDone / duration;
-
-            string report = "";
-            if (dps > 0) report += $"DPS: {dps:F1}\n";
-            if (hps > 0) report += $"HPS: {hps:F1}";
-
-            if (report != "")
-            {
-                StartCoroutine(ShowReport(report));
-            }
-
-            // RESET POSIZIONE (Funzionalità richiesta)
-            ResetPosition();
+            statusUI.UpdateHealth(currentHealth, maxHealth);
+            statusUI.UpdateShield(currentShield, maxHealth);
+            statusUI.UpdateSlow(currentSlowPercent);
         }
     }
 
-    void ResetPosition()
+    void UpdateShieldVisual()
     {
-        // Ferma qualsiasi movimento residuo
-        if (rb)
-        {
-            rb.linearVelocity = Vector3.zero;
-            rb.angularVelocity = Vector3.zero;
-        }
-
-        // Teletrasporta al punto di origine
-        transform.position = startPosition;
-        transform.rotation = startRotation;
+        if (shieldVisualObject) shieldVisualObject.SetActive(currentShield > 1f);
     }
 
-    // --- UTILS ---
-    public void Heal(float amount)
+    void UpdateVisualColor()
     {
-        if (type == DummyType.Enemy) { SpawnPopup("0", Color.grey, 3f); return; }
-        CheckCombatStart();
-        float h = Mathf.Min(amount, maxHealth - currentHealth);
-        currentHealth += h; totalHealingDone += h;
-        SpawnPopup($"+{h:F0} HP", Color.green, 5f); Flash(Color.green); UpdateUI();
-    }
-    public void AddShield(float amount)
-    {
-        if (type == DummyType.Enemy) { SpawnPopup("0", Color.grey, 3f); return; }
-        CheckCombatStart(); currentShield += amount; SpawnPopup($"+{amount:F0} SHLD", Color.yellow, 4f); UpdateUI();
+        if (!meshRenderer || flashRoutine != null) return;
+
+        if (isFrozen)
+            meshRenderer.material.color = freezeColor;
+        else if (currentSlowPercent > 0)
+            meshRenderer.material.color = Color.Lerp(baseColor, freezeColor, currentSlowPercent / 100f);
+        else
+            meshRenderer.material.color = baseColor;
     }
 
-    void UpdateUI() { if (statusUI) { statusUI.UpdateHealth(currentHealth, maxHealth); statusUI.UpdateShield(currentShield, maxHealth); statusUI.UpdateSlow(currentSlowPercent); } }
-    void UpdateShieldVisual() { if (shieldVisualObject) shieldVisualObject.SetActive(currentShield > 1f); }
-    void UpdateVisualColor() { if (!meshRenderer || flashRoutine != null) return; if (isFrozen) meshRenderer.material.color = freezeColor; else if (currentSlowPercent > 0) meshRenderer.material.color = Color.Lerp(baseColor, freezeColor, currentSlowPercent / 100f); else meshRenderer.material.color = baseColor; }
-
-    IEnumerator ShowReport(string t) { yield return new WaitForSeconds(0.2f); SpawnPopup("--- REPORT ---", Color.white, 4f); yield return new WaitForSeconds(0.3f); SpawnPopup(t, Color.white, 6f); }
-    void SpawnPopup(string t, Color c, float s) { if (!floatingTextPrefab) return; Vector3 p = popupSpawnPoint ? popupSpawnPoint.position : transform.position + Vector3.up * 2f; GameObject o = Instantiate(floatingTextPrefab, p, Quaternion.identity); FloatingText ft = o.GetComponent<FloatingText>(); if (ft) ft.Setup(t, c, s); }
-    void Flash(Color c) { if (!meshRenderer) return; if (flashRoutine != null) StopCoroutine(flashRoutine); flashRoutine = StartCoroutine(FlashRoutine(c)); }
-    IEnumerator FlashRoutine(Color c) { meshRenderer.material.color = c; yield return new WaitForSeconds(0.1f); flashRoutine = null; UpdateVisualColor(); }
-    void Die() { SpawnPopup("DISTRUTTO", Color.grey, 7f); gameObject.SetActive(false); Invoke(nameof(Respawn), 2f); }
-    void Respawn()
+    void Flash(Color c)
     {
-        gameObject.SetActive(true);
-        ResetPosition(); // Reset anche al respawn
-        if (type == DummyType.Prince) currentHealth = maxHealth * 0.2f; else currentHealth = maxHealth;
-        currentShield = 0; currentSlowPercent = 0; isFrozen = false; meshRenderer.material.color = baseColor; UpdateUI();
+        if (!meshRenderer) return;
+        if (flashRoutine != null) StopCoroutine(flashRoutine);
+        flashRoutine = StartCoroutine(FlashRoutine(c));
     }
+
+    IEnumerator FlashRoutine(Color c)
+    {
+        meshRenderer.material.color = c;
+        yield return new WaitForSeconds(0.1f);
+        flashRoutine = null;
+        UpdateVisualColor();
+    }
+
+    void SpawnPopup(string text, Color color, float size = 4f)
+    {
+        if (!floatingTextPrefab) return;
+
+        Vector3 spawnPos = popupSpawnPoint ? popupSpawnPoint.position : transform.position + Vector3.up * 2f;
+        GameObject obj = Instantiate(floatingTextPrefab, spawnPos, Quaternion.identity);
+        FloatingText ft = obj.GetComponent<FloatingText>();
+        if (ft) ft.Setup(text, color, size);
+    }
+
+    // Logica Reset Manichino
+    void CheckCombatStart() { lastHitTime = Time.time; if (!inCombat) { inCombat = true; combatStartTime = Time.time; totalDamageDealt = 0; totalHealingDone = 0; } }
+    void HandleDPSLogic() { if (inCombat && Time.time > lastHitTime + combatResetTime) { inCombat = false; ReportDPS(); ResetPosition(); } }
+    void ReportDPS() { float d = lastHitTime - combatStartTime; if (d < 0.1f) d = 1f; float dps = totalDamageDealt / d; if (dps > 0) SpawnPopup($"DPS: {dps:F1}", Color.white, 5f); }
+    void ResetPosition() { if (rb) { rb.linearVelocity = Vector3.zero; rb.angularVelocity = Vector3.zero; } transform.position = startPosition; transform.rotation = startRotation; }
+    void Respawn() { gameObject.SetActive(true); ResetPosition(); if (type == DummyType.Prince) currentHealth = maxHealth * 0.2f; else currentHealth = maxHealth; currentShield = 0; currentSlowPercent = 0; isFrozen = false; UpdateUI(); }
 }

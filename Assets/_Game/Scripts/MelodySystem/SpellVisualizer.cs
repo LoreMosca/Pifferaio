@@ -6,6 +6,7 @@ public class SpellVisualizer : MonoBehaviour
     public GameObject projectilePrefab;
     public GameObject areaPrefab; // Assicurati che abbia Renderer e SphereCollider
     public GameObject beamPrefab;
+    public GameObject buffPrefab;
 
     [Header("--- CAST POINTS ---")]
     public Transform castPointForward;
@@ -63,8 +64,10 @@ public class SpellVisualizer : MonoBehaviour
 
     void ApplyBuffLogic(Transform target, Color c, SpellPayload p)
     {
-        // Usa areaPrefab come aura temporanea
-        GameObject obj = Instantiate(areaPrefab, target.position, Quaternion.identity);
+        // MODIFICA: Ora usa buffPrefab invece di areaPrefab
+        GameObject prefabToUse = buffPrefab != null ? buffPrefab : areaPrefab;
+
+        GameObject obj = Instantiate(prefabToUse, target.position, Quaternion.identity);
 
         // Collega Script Logica Buff
         SpellBuffEffect buffScript = obj.GetComponent<SpellBuffEffect>();

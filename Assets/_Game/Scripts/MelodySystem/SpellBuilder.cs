@@ -32,7 +32,7 @@ public struct SpellPayload
     public List<Vector3> fireDirections;
 }
 
-public enum SpellEffect { Damage, Heal, Slow, Shield }
+public enum SpellEffect { Damage, Heal, Slow, Shield, DamageUp, SpeedUp }
 public enum SpellForm { Projectile, AreaAoE, LinearBeam, SelfBuff }
 
 public class SpellBuilder : MonoBehaviour
@@ -107,15 +107,32 @@ public class SpellBuilder : MonoBehaviour
         // 2. EFFETTO (Prima Nota)
         switch (notes[0].color)
         {
-            case NoteColor.Green: p.effect = SpellEffect.Heal; break;
-            case NoteColor.Blue: p.effect = SpellEffect.Slow; break;
-            case NoteColor.Red: p.effect = SpellEffect.Damage; break;
-            case NoteColor.Yellow: p.effect = SpellEffect.Shield; break;
+            case NoteColor.Green:
+                p.effect = SpellEffect.Heal;
+                break;
+
+            case NoteColor.Blue:
+                if (p.delivery == SpellForm.SelfBuff) p.effect = SpellEffect.SpeedUp;
+                else p.effect = SpellEffect.Slow;
+                break;
+
+            case NoteColor.Red:
+                if (p.delivery == SpellForm.SelfBuff) p.effect = SpellEffect.DamageUp;
+                else p.effect = SpellEffect.Damage;
+                break;
+
+            case NoteColor.Yellow:
+                // TORNIAMO ALLA LOGICA ORIGINALE: Giallo = Scudo.
+                // Se è un buff, sarà Scudo nel Tempo.
+                p.effect = SpellEffect.Shield;
+                break;
         }
 
         // 3. CALCOLO POTENZA (Scaling Livello)
         float levelMultiplier = 1.0f + ((melody.level - 1) * powerPerLevel);
         p.powerValue *= levelMultiplier;
+        p.knockback *= levelMultiplier;
+
         p.knockback *= levelMultiplier;
 
         // 4. ESTENSIONI (Dalla 3a nota in poi)

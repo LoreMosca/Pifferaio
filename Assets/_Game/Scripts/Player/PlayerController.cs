@@ -2,10 +2,9 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using Unity.Cinemachine;
 using System.Collections;
-using System.Collections.Generic;
 
 [RequireComponent(typeof(CharacterController))]
-[RequireComponent(typeof(PlayerStats))] // Assicura che ci siano le stats
+[RequireComponent(typeof(PlayerStats))]
 public class PlayerController : MonoBehaviour
 {
     [System.Serializable]
@@ -42,7 +41,13 @@ public class PlayerController : MonoBehaviour
     public Transform visualRoot;
     public Transform castPoint;
     public Animator animator;
-    public CinemachineImpulseSource impulseSource;
+    public CinemachineImpulseSource impulseSource; // Usato per attacchi
+
+    [Header("--- JUICE (CAMERA SHAKE DANNO) ---")]
+    [Tooltip("Intensità del tremolio quando il player prende danno.")]
+    public float damageShakeIntensity = 2f;
+    [Tooltip("Durata del tremolio.")]
+    public float damageShakeDuration = 0.2f;
 
     [Header("--- PARAMETRI FISICI ---")]
     public float moveSpeed = 6f;
@@ -50,65 +55,18 @@ public class PlayerController : MonoBehaviour
     public float rotationSpeed = 25f;
     public float gravity = -9.81f;
 
+    // --- ATTACCHI CONFIG ---
     [Header("--- ATTACCHI (Stamina Based) ---")]
-
-    [SerializeField]
-    public AttackConfig greenConfig = new AttackConfig
-    {
-        damage = 12f,
-        knockback = 2f,
-        staminaCost = 15f,
-        cooldown = 0.3f,
-        duration = 0.15f,
-        screenShake = 0.1f,
-        forwardOffset = 0.5f
-    };
-
-    [SerializeField]
-    public AttackConfig blueConfig = new AttackConfig
-    {
-        damage = 25f,
-        knockback = 6f,
-        staminaCost = 30f,
-        cooldown = 0.6f,
-        duration = 0.3f,
-        screenShake = 0.3f,
-        startScale = Vector3.one,
-        endScale = new Vector3(3, 1, 3)
-    };
-
-    [SerializeField]
-    public AttackConfig redConfig = new AttackConfig
-    {
-        damage = 60f,
-        knockback = 18f,
-        staminaCost = 60f,
-        cooldown = 1.0f,
-        duration = 0.4f,
-        screenShake = 2.5f,
-        startScale = Vector3.one,
-        endScale = Vector3.one * 3.5f
-    };
-
-    [SerializeField]
-    public AttackConfig yellowConfig = new AttackConfig
-    {
-        damage = 0f,
-        knockback = 10f,
-        staminaCost = 10f,
-        cooldown = 0.5f,
-        duration = 0.5f,
-        startScale = Vector3.one * 1.5f
-    };
+    [SerializeField] public AttackConfig greenConfig;
+    [SerializeField] public AttackConfig blueConfig;
+    [SerializeField] public AttackConfig redConfig;
+    [SerializeField] public AttackConfig yellowConfig;
 
     [Header("--- BILANCIAMENTO EXTRA ---")]
     public float minChargeTimeRed = 0.5f;
     public float parryWindowDuration = 0.5f;
-    [Tooltip("Stamina consumata al secondo per tenere lo scudo alzato.")]
     public float shieldDrainPerSecond = 15f;
-    [Tooltip("Stamina persa quando si blocca un colpo (non parry).")]
     public float shieldHitPenalty = 10f;
-    [Tooltip("Stamina recuperata quando si esegue un Parry Perfetto.")]
     public float parryStaminaReward = 30f;
 
     [Header("--- SISTEMI ---")]
@@ -123,11 +81,12 @@ public class PlayerController : MonoBehaviour
     private GameInputs inputActions;
     private Camera mainCamera;
 
+    // Riferimento al Noise della Cinemachine per lo shake manuale
+    private CinemachineBasicMultiChannelPerlin cinemachineNoise;
+
     // Input
     private Vector2 moveInput;
     private Vector2 mousePos;
-    private Vector3 velocity;
-
     private float globalActionTimer = 0f;
 
     private enum PlayerState { Normal, Attacking, ChargingRed, GuardingYellow, CastingSpell }
@@ -147,6 +106,7 @@ public class PlayerController : MonoBehaviour
         mainCamera = Camera.main;
         inputActions = new GameInputs();
 
+        // Setup Inputs...
         inputActions.Player.Move.performed += ctx => moveInput = ctx.ReadValue<Vector2>();
         inputActions.Player.Move.canceled += ctx => moveInput = Vector2.zero;
         inputActions.Player.Look.performed += ctx => mousePos = ctx.ReadValue<Vector2>();
@@ -158,6 +118,23 @@ public class PlayerController : MonoBehaviour
         inputActions.Player.Skill4.started += ctx => OnYellowInputStart();
         inputActions.Player.Skill4.canceled += ctx => OnYellowInputEnd();
         inputActions.Player.Cast.performed += ctx => PerformCast();
+    }
+
+    void Start()
+    {
+        // Setup Camera Shake (cerca la virtual camera attiva)
+        var vCam = FindFirstObjectByType<CinemachineCamera>();
+        if (vCam != null)
+            cinemachineNoise = vCam.GetComponent<CinemachineBasicMultiChannelPerlin>();
+
+        // Iscriviti all'evento danno per scuotere la camera
+        if (stats) stats.OnTakeDamage += TriggerDamageShake;
+    }
+
+    void OnDestroy()
+    {
+        if (stats) stats.OnTakeDamage -= TriggerDamageShake;
+        inputActions.Disable();
     }
 
     void OnEnable() => inputActions.Enable();
@@ -189,58 +166,71 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    // --- COMUNICAZIONE ESTERNA ---
-    public void SetChanneling(bool active)
+    // --- CAMERA SHAKE ---
+    void TriggerDamageShake()
     {
-        isChanneling = active;
+        StartCoroutine(ShakeRoutine());
     }
 
-    // --- INPUT WRAPPERS ---
+    IEnumerator ShakeRoutine()
+    {
+        if (cinemachineNoise)
+        {
+            cinemachineNoise.AmplitudeGain = damageShakeIntensity;
+            yield return new WaitForSeconds(damageShakeDuration);
+            cinemachineNoise.AmplitudeGain = 0f;
+        }
+    }
 
+    // --- MOVEMENT ---
+    void HandleMovement()
+    {
+        Vector3 move = new Vector3(moveInput.x, 0, moveInput.y);
+        if (move.magnitude > 1f) move.Normalize();
+
+        float speed = moveSpeed;
+
+        // APPLICA IL MOLTIPLICATORE DEI BUFF (NUOVO)
+        if (stats != null) speed *= stats.speedMultiplier;
+
+        // Rallentamenti cumulativi
+        if (isChanneling) speed *= 0.3f;
+        else if (currentState == PlayerState.GuardingYellow) speed *= 0.5f;
+
+        if (stats.isExhausted)
+        {
+            speed *= exhaustedSpeedFactor;
+            if (animator) animator.speed = 0.5f;
+        }
+        else
+        {
+            if (animator) animator.speed = 1f;
+        }
+
+        controller.Move(move * speed * Time.deltaTime);
+    }
+
+    // --- COMUNICAZIONE ESTERNA ---
+    public void SetChanneling(bool active) => isChanneling = active;
+
+    // --- INPUT WRAPPERS ---
     bool CanPerformAction()
     {
         if (globalActionTimer > 0) return false;
         if (isChanneling) return false;
-
-        // UNICO BLOCCO: Sei già esausto?
         if (stats.isExhausted) return false;
-
-        // Se hai 0 stamina ma non sei esausto (caso raro), blocchiamo per evitare loop
         if (stats.currentStamina <= 0) return false;
-
         return true;
     }
 
-    void OnGreenInput()
-    {
-        // Non passiamo più il costo al controllo, verifichiamo solo lo stato
-        if (!CanPerformAction()) return;
-        PerformGreenAttack();
-    }
-
-    void OnBlueInput()
-    {
-        if (!CanPerformAction()) return;
-        PerformBlueAttack();
-    }
-
-    void OnRedInputStart()
-    {
-        if (!CanPerformAction()) return;
-        StartChargingRed();
-    }
-    // ReleaseRedAttack consuma la stamina DOPO, quindi va bene così com'è.
-
+    void OnGreenInput() { if (!CanPerformAction()) return; PerformGreenAttack(); }
+    void OnBlueInput() { if (!CanPerformAction()) return; PerformBlueAttack(); }
+    void OnRedInputStart() { if (!CanPerformAction()) return; StartChargingRed(); }
     void OnRedInputEnd() { ReleaseRedAttack(); }
-
-    void OnYellowInputStart()
-    {
-        if (!CanPerformAction()) return;
-        StartGuardingInput();
-    }
+    void OnYellowInputStart() { if (!CanPerformAction()) return; StartGuardingInput(); }
     void OnYellowInputEnd() { StopGuardingInput(); }
 
-    // --- LOGICA AZIONI ---
+    // --- AZIONI ATTACCO (Logica Originale Mantenuta) ---
 
     void PerformGreenAttack()
     {
@@ -254,7 +244,12 @@ public class PlayerController : MonoBehaviour
     {
         currentState = PlayerState.Attacking;
         spellSystem.PushNote(0);
-        GameObject poke = SpawnAttackVisual(greenConfig, Color.green);
+
+        // APPLICA DANNO MOLTIPLICATO
+        float finalDmg = greenConfig.damage * stats.damageMultiplier;
+
+        GameObject poke = SpawnAttackVisual(greenConfig, Color.green, finalDmg); // Overload con danno
+
         float elapsed = 0;
         Vector3 startPos = poke.transform.localPosition;
         Vector3 targetPos = startPos + (Vector3.forward * greenConfig.forwardOffset);
@@ -282,14 +277,18 @@ public class PlayerController : MonoBehaviour
         currentState = PlayerState.Attacking;
         spellSystem.PushNote(1);
         AttackConfig cfg = blueConfig;
+
+        float finalDmg = cfg.damage * stats.damageMultiplier;
+
         Transform root = (cfg.originType == AttackOrigin.PlayerCenter) ? visualRoot : castPoint;
         GameObject pivot = new GameObject("SlashPivot");
         pivot.transform.position = root.position; pivot.transform.rotation = root.rotation; pivot.transform.SetParent(root);
+
         GameObject slash = Instantiate(cfg.prefab, pivot.transform);
         slash.transform.localPosition = new Vector3(0, cfg.heightOffset, cfg.forwardOffset); slash.transform.localScale = cfg.startScale;
 
         Collider col = slash.GetComponent<Collider>(); if (col == null) col = slash.GetComponentInChildren<Collider>();
-        if (col != null) { col.isTrigger = true; var hb = col.gameObject.AddComponent<BasicAttackHitbox>(); hb.Setup(cfg.damage, cfg.knockback); }
+        if (col != null) { col.isTrigger = true; var hb = col.gameObject.AddComponent<BasicAttackHitbox>(); hb.Setup(finalDmg, cfg.knockback); }
 
         SetColor(slash, Color.cyan);
         float elapsed = 0;
@@ -351,7 +350,10 @@ public class PlayerController : MonoBehaviour
     {
         spellSystem.PushNote(2);
         AttackConfig cfg = redConfig;
-        GameObject smash = SpawnAttackVisual(cfg, Color.red);
+
+        float finalDmg = cfg.damage * stats.damageMultiplier;
+
+        GameObject smash = SpawnAttackVisual(cfg, Color.red, finalDmg);
         float elapsed = 0; bool impactPlayed = false;
         while (elapsed < cfg.duration)
         {
@@ -365,16 +367,15 @@ public class PlayerController : MonoBehaviour
         currentState = PlayerState.Normal;
     }
 
-    // --- LOGICA GIALLA (SCUDO STAMINA) ---
-
+    // --- LOGICA GIALLA (SCUDO) ---
     void StartGuardingInput()
     {
         if (currentState != PlayerState.Normal) return;
         currentState = PlayerState.GuardingYellow;
         guardStartTime = Time.time;
-        stats.isShielded = true; // Attiva flag stats
+        stats.isShielded = true;
 
-        activeShieldInstance = SpawnAttackVisual(yellowConfig, Color.clear, true);
+        activeShieldInstance = SpawnAttackVisual(yellowConfig, Color.clear, -1, true); // -1 danno perché è scudo
         ParryShield parry = activeShieldInstance.GetComponent<ParryShield>();
         if (parry == null) parry = activeShieldInstance.AddComponent<ParryShield>();
         parry.Setup(this, parryWindowDuration);
@@ -385,10 +386,9 @@ public class PlayerController : MonoBehaviour
     void StopGuardingInput()
     {
         if (currentState != PlayerState.GuardingYellow) return;
-
         spellSystem.PushNote(3);
         globalActionTimer = 0.2f;
-        stats.isShielded = false; // Disattiva flag stats
+        stats.isShielded = false;
 
         if (activeShieldInstance != null) Destroy(activeShieldInstance);
         currentState = PlayerState.Normal;
@@ -402,74 +402,30 @@ public class PlayerController : MonoBehaviour
             if (stats.isExhausted)
             {
                 StopGuardingInput();
-                Debug.Log("Guardia rotta per esaurimento stamina!");
+                Debug.Log("Guardia rotta!");
             }
         }
     }
 
-    // --- CALLBACKS DALLO SCUDO ---
-
     public void OnParrySuccess()
     {
-        // RICOMPENSA: Recupera stamina e azzera il global timer
         if (stats != null)
         {
-            // Aggiungiamo stamina manualmente accedendo alla variabile pubblica (o tramite Heal se preferisci)
             stats.currentStamina = Mathf.Min(stats.currentStamina + parryStaminaReward, stats.maxStamina);
-            stats.OnStatsChanged?.Invoke(); // Aggiorna UI
+            stats.OnStatsChanged?.Invoke();
         }
-
-        globalActionTimer = 0f; // Permette di agire subito dopo il parry
-        Debug.Log("<color=green>PARRY! Stamina Recuperata.</color>");
+        globalActionTimer = 0f;
+        Debug.Log("<color=green>PARRY!</color>");
     }
 
     public void OnShieldHit()
     {
-        // PUNIZIONE: Perdi stamina extra quando blocchi un colpo (senza parry)
-        if (stats != null)
-        {
-            stats.ConsumeStamina(shieldHitPenalty);
-        }
-
-        // Feedback fisico
+        if (stats != null) stats.ConsumeStamina(shieldHitPenalty);
         if (impulseSource != null) impulseSource.GenerateImpulse(0.2f);
     }
 
-    // --- MOVEMENT & UTILS ---
-
-    void HandleMovement()
-    {
-        Vector3 move = new Vector3(moveInput.x, 0, moveInput.y);
-
-        // Normalizza solo se supera 1 (per pad analogici)
-        if (move.magnitude > 1f) move.Normalize();
-
-        float speed = moveSpeed;
-
-        // LOGICA RALLENTAMENTI CUMULATIVI
-        if (isChanneling)
-            speed *= 0.3f; // Molto lento mentre usi il raggio
-
-        else if (currentState == PlayerState.GuardingYellow)
-            speed *= 0.5f; // Lento mentre pari
-
-        // RALLENTAMENTO DA STANCHEZZA (Prioritario)
-        if (stats.isExhausted)
-        {
-            speed *= exhaustedSpeedFactor; // Es. 0.4x velocità normale
-
-            // Opzionale: impedisci di correre, forza la camminata nell'animator
-            if (animator) animator.speed = 0.5f; // Rallenta anche l'animazione di corsa
-        }
-        else
-        {
-            if (animator) animator.speed = 1f; // Ripristina velocità animazione
-        }
-
-        controller.Move(move * speed * Time.deltaTime);
-    }
-
-    GameObject SpawnAttackVisual(AttackConfig config, Color color, bool isShield = false)
+    // --- UTILS GRAFICI ---
+    GameObject SpawnAttackVisual(AttackConfig config, Color color, float overrideDamage = -1, bool isShield = false)
     {
         Transform root = (config.originType == AttackOrigin.PlayerCenter) ? visualRoot : castPoint;
         GameObject obj = Instantiate(config.prefab, root.position, root.rotation);
@@ -480,12 +436,9 @@ public class PlayerController : MonoBehaviour
 
         if (!isShield && col != null)
         {
-            // Aggiungi script Hitbox
             var hitbox = col.gameObject.AddComponent<BasicAttackHitbox>();
-
-            // --- FIX QUI: Passiamo SIA il danno CHE il knockback ---
-            hitbox.Setup(config.damage, config.knockback);
-            // ------------------------------------------------------
+            float dmg = (overrideDamage >= 0) ? overrideDamage : config.damage;
+            hitbox.Setup(dmg, config.knockback);
         }
 
         obj.transform.SetParent(root);
@@ -516,7 +469,6 @@ public class PlayerController : MonoBehaviour
     }
 
     void ApplyGravity() { if (!controller.isGrounded) controller.Move(Vector3.up * gravity * Time.deltaTime); }
-
     void UpdateMovementAnimation()
     {
         if (animator)
@@ -527,7 +479,17 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    void PerformCast() { if (currentState != PlayerState.Normal || !spellSystem.HasSpellReady()) return; currentState = PlayerState.CastingSpell; animator.SetTrigger("Cast"); StartCoroutine(CastSafetyRoutine(0.4f)); }
+    void PerformCast()
+    {
+        if (currentState != PlayerState.Normal) return;
+        if (!spellSystem.HasSpellReady()) return;
+
+        spellSystem.SpawnSuccessVFX(transform.position);
+        currentState = PlayerState.CastingSpell;
+        animator.SetTrigger("Cast");
+        StartCoroutine(CastSafetyRoutine(0.4f));
+    }
+
     IEnumerator CastSafetyRoutine(float delay) { yield return new WaitForSeconds(delay); if (currentState == PlayerState.CastingSpell) { OnSpellFireFrame(); yield return new WaitForSeconds(0.2f); OnCastEndFrame(); } }
     public void OnSpellFireFrame() { if (currentState == PlayerState.CastingSpell) spellSystem.FireCurrentSpell(castPoint); }
     public void OnCastEndFrame() { currentState = PlayerState.Normal; }

@@ -12,6 +12,10 @@ public class SpellCasterSystem : MonoBehaviour
     [Tooltip("Gestisce la visualizzazione grafica degli attacchi.")]
     public SpellVisualizer visualizer;
 
+    [Header("--- FEEDBACK CASTING ---")]
+    [Tooltip("Il VFX (Anelli Dorati) che appare a terra quando il cast ha successo.")]
+    public GameObject castSuccessVFX;
+
     [Header("--- CONFIGURAZIONE INPUT ---")]
     [Tooltip("Mappatura tasti -> Note.")]
     public NoteDefinition[] keyMappings;
@@ -40,7 +44,30 @@ public class SpellCasterSystem : MonoBehaviour
         if (generator == null) generator = GetComponent<ProceduralGenerator>();
     }
 
-    // --- GESTIONE INPUT ---
+    public void SpawnSuccessVFX(Vector3 playerPosition)
+    {
+        if (castSuccessVFX == null) return;
+
+        // Raycast per trovare il terreno esatto sotto i piedi
+        Vector3 spawnPos = playerPosition;
+        RaycastHit hit;
+
+        // Spara un raggio da 1 metro sopra il player verso il basso
+        if (Physics.Raycast(playerPosition + Vector3.up, Vector3.down, out hit, 5f))
+        {
+            spawnPos = hit.point + Vector3.up * 0.05f; // Appena sopra il terreno per non compenetrare
+        }
+
+        GameObject vfx = Instantiate(castSuccessVFX, spawnPos, Quaternion.identity);
+
+        // Se il terreno è inclinato, allinea i cerchi alla pendenza
+        if (hit.collider != null)
+        {
+            vfx.transform.rotation = Quaternion.FromToRotation(Vector3.up, hit.normal);
+        }
+
+        Destroy(vfx, 3.0f); // Pulizia automatica dopo 3 secondi
+    }
 
     public void PushNote(int noteIndex)
     {
@@ -176,6 +203,11 @@ public class SpellCasterSystem : MonoBehaviour
             inventory.Add(incomingMelody);
             Debug.Log($"<color=green>NEW SPELL!</color> {incomingMelody.spellName} aggiunto al grimorio.");
         }
+    }
+
+    public void LootFromPickup(Melody melody)
+    {
+        if (melody != null) AddOrLevelUp(melody);
     }
 
     // --- GUI DEBUG ---
