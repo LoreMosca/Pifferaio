@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using System.Linq;
@@ -20,6 +21,10 @@ public class SpellCasterSystem : MonoBehaviour
     [Tooltip("Mappatura tasti -> Note.")]
     public NoteDefinition[] keyMappings;
 
+    [Header("--- DEBUG SETTINGS ---")]
+    [Tooltip("Se VERO mostra i bottoni e il grimorio a schermo.")]
+    public bool showDebugGUI = true;
+
     [Header("--- DEBUG LOOT TABLES (3 Fonti) ---")]
     [Tooltip("Tabella per casse comuni (Tier bassi frequenti).")]
     public LootTable debugCommonTable;
@@ -31,6 +36,9 @@ public class SpellCasterSystem : MonoBehaviour
     [Header("--- STATO RUNTIME ---")]
     [SerializeField] private List<Melody> inventory = new List<Melody>();
     [SerializeField] private List<NoteDefinition> currentInputQueue = new List<NoteDefinition>();
+
+    public Action OnInputChanged;
+    public Action OnGrimoireUpdated;
 
     // Variabili interne per la logica di combo
     private List<int> matchedIndices = new List<int>();
@@ -79,6 +87,8 @@ public class SpellCasterSystem : MonoBehaviour
             currentInputQueue.RemoveAt(0);
 
         CheckForCombinations();
+
+        OnInputChanged?.Invoke();
     }
 
     void CheckForCombinations()
@@ -140,6 +150,22 @@ public class SpellCasterSystem : MonoBehaviour
         // Costruisci il payload (include calcolo potenza basato su Livello e Tier)
         SpellPayload payload = builder.BuildSpell(readySpell);
 
+        if (PayloadMover.Instance != null && readySpell.sequence.Count > 0)
+        {
+            // Prendiamo il colore della PRIMA nota della melodia
+            NoteColor mainColor = readySpell.sequence[0].color;
+
+            // Chiediamo al Principe se corrisponde al suo desiderio
+            float bonus = PayloadMover.Instance.CheckWhimBonus(mainColor);
+
+            // Se sì, aumentiamo la potenza
+            if (bonus > 1.0f)
+            {
+                payload.powerValue *= bonus;
+                // Debug.Log($"<color=green>CAPRICCIO SODDISFATTO! Danni x{bonus}</color>");
+            }
+        }
+
         if (visualizer != null) visualizer.VisualizeSpell(payload, defaultOrigin);
 
         Debug.Log($"<color=cyan>CAST: {payload.constructedName}</color>");
@@ -156,6 +182,8 @@ public class SpellCasterSystem : MonoBehaviour
 
         // Ricontrolla subito se le note rimaste formano un'altra combo
         CheckForCombinations();
+
+        OnInputChanged?.Invoke();
     }
 
     // --- GESTIONE LOOT & LIVELLAMENTO ---
@@ -203,6 +231,8 @@ public class SpellCasterSystem : MonoBehaviour
             inventory.Add(incomingMelody);
             Debug.Log($"<color=green>NEW SPELL!</color> {incomingMelody.spellName} aggiunto al grimorio.");
         }
+
+        OnGrimoireUpdated?.Invoke();
     }
 
     public void LootFromPickup(Melody melody)
@@ -210,10 +240,15 @@ public class SpellCasterSystem : MonoBehaviour
         if (melody != null) AddOrLevelUp(melody);
     }
 
+    public Melody GetReadySpell() => readySpell;
+    public List<Melody> GetInventory() => inventory;
+
     // --- GUI DEBUG ---
 
     void OnGUI()
     {
+        if (!showDebugGUI) return; // <--- AGGIUNTA: Esce se disattivato
+
         GUIStyle st = new GUIStyle(GUI.skin.label) { fontSize = 14, fontStyle = FontStyle.Bold };
         st.normal.textColor = Color.white;
 

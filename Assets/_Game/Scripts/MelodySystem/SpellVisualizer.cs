@@ -105,5 +105,33 @@ public class SpellVisualizer : MonoBehaviour
     IEnumerator SpawnProjectileBurst(Vector3 pos, Quaternion rot, Color c, SpellPayload p) { for (int i = 0; i < p.burstCount; i++) { GameObject obj = Instantiate(projectilePrefab, pos, rot); Colorize(obj, c); SmartProjectile brain = obj.GetComponent<SmartProjectile>(); if (brain == null) brain = obj.AddComponent<SmartProjectile>(); brain.Initialize(p); yield return new WaitForSeconds(0.15f); } }
 
     void Colorize(GameObject obj, Color c) { var rend = obj.GetComponent<Renderer>(); if (rend) rend.material.color = c; }
-    Color GetColorFromEffect(SpellEffect effect) { switch (effect) { case SpellEffect.Damage: return Color.red; case SpellEffect.Heal: return Color.green; case SpellEffect.Slow: return Color.cyan; case SpellEffect.Shield: return Color.yellow; default: return Color.white; } }
+    Color GetColorFromEffect(SpellEffect effect)
+    {
+        switch (effect)
+        {
+            case SpellEffect.Heal:
+                return Color.green;
+
+            case SpellEffect.Shield:
+                return Color.yellow;
+
+            case SpellEffect.Damage:
+                return Color.red;
+
+            case SpellEffect.Slow:
+                return Color.cyan; // O Color.blue se preferisci più scuro
+
+            // --- AGGIUNGI QUESTI DUE ---
+            case SpellEffect.DamageUp:
+                return Color.red; // I buff di danno devono essere ROSSI
+
+            case SpellEffect.SpeedUp:
+                return Color.cyan; // I buff di velocità devono essere BLU/AZZURRI
+
+            // ---------------------------
+
+            default:
+                return Color.white;
+        }
+    }
 }

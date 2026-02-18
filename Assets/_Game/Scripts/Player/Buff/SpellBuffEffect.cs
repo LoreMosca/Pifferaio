@@ -28,7 +28,7 @@ public class SpellBuffEffect : MonoBehaviour
 
         SetVFXColor(color);
 
-        // 1. APPLICA STATS FISSE (Speed/Damage)
+        // 1. APPLICA STATS FISSE
         if (targetStats)
         {
             if (payload.effect == SpellEffect.SpeedUp)
@@ -38,14 +38,22 @@ public class SpellBuffEffect : MonoBehaviour
                 targetStats.damageMultiplier += (payload.powerValue / 100f);
         }
 
-        // 2. FEEDBACK FORTUNA (Ecco la modifica!)
-        // Se c'è fortuna nel payload (es. Buff Giallo), avvisa il giocatore
-        if (payload.lootLuckChance > 0.1f)
+        // 2. FEEDBACK FORTUNA (LOGICA TIERED)
+        if (targetStats && payload.lootLuckChance > 0f)
         {
-            if (targetStats) targetStats.SpawnPopup("LUCK UP!", Color.yellow);
+            if (payload.lootLuckChance >= 0.25f)
+            {
+                // Tier Alto: Oro e Testo Epico
+                targetStats.SpawnPopup("MAX LUCK!", new Color(1f, 0.84f, 0f));
+            }
+            else
+            {
+                // Tier Basso: Giallo e Testo Normale
+                targetStats.SpawnPopup("LUCK UP!", Color.yellow);
+            }
         }
 
-        // 3. MOSTRA ICONA UI (Heal, Shield, Damage, Speed)
+        // 3. MOSTRA ICONA UI
         if (BuffManager.Instance)
         {
             BuffManager.Instance.AddBuff(payload.effect, duration);
@@ -70,14 +78,14 @@ public class SpellBuffEffect : MonoBehaviour
         age += Time.deltaTime;
         transform.Rotate(Vector3.up * rotateSpeed * Time.deltaTime);
 
-        // Panic Mode (ultimi 3s)
+        // Panic Mode VFX (ultimi 3s)
         if (duration - age <= 3.0f)
         {
             float pulse = Mathf.PingPong(Time.time * 15f, 0.3f);
             transform.localScale = initialScale * (1f + pulse);
         }
 
-        // TICK LOGIC (Shield on Tick!)
+        // TICK LOGIC
         tickTimer += Time.deltaTime;
         float interval = (payload.tickRate > 0) ? (1f / payload.tickRate) : 99f;
 
@@ -96,13 +104,8 @@ public class SpellBuffEffect : MonoBehaviour
         {
             switch (payload.effect)
             {
-                case SpellEffect.Heal:
-                    targetStats.Heal(payload.powerValue);
-                    break;
-                case SpellEffect.Shield:
-                    // Eccolo: Scudo nel tempo!
-                    targetStats.AddShield(payload.powerValue);
-                    break;
+                case SpellEffect.Heal: targetStats.Heal(payload.powerValue); break;
+                case SpellEffect.Shield: targetStats.AddShield(payload.powerValue); break;
             }
         }
     }

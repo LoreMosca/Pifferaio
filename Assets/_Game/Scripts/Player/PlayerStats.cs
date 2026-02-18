@@ -33,6 +33,7 @@ public class PlayerStats : MonoBehaviour, IDamageable
     // Eventi
     public Action OnStatsChanged;
     public Action OnTakeDamage; // Usato dal Controller per il Camera Shake
+    public Action OnDeath;
 
     private float regenTimer = 0f;
 
@@ -160,6 +161,9 @@ public class PlayerStats : MonoBehaviour, IDamageable
     {
         Debug.Log("PLAYER MORTO");
         SpawnPopup("MORTO", Color.black);
+
+        OnDeath?.Invoke();
+        gameObject.SetActive(false);
     }
 
     // --- HELPER POPUP ---

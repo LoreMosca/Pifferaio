@@ -1,13 +1,13 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-// --- SETTINGS (Knockback Aggiunto) ---
+// --- SETTINGS (Knockback Preservato) ---
 [System.Serializable] public class ProjectileSettings { public float baseDamage = 15f; public float speed = 20f; public float size = 0.5f; public int basePenetration = 0; public float knockback = 5f; }
 [System.Serializable] public class AreaSettings { public float valuePerTick = 5f; public float radius = 4f; public float duration = 5f; public float tickInterval = 1.0f; public float knockback = 3f; }
 [System.Serializable] public class BeamSettings { public float startDps = 8f; public float maxLength = 10f; public float duration = 3.5f; public float baseTickRate = 4f; public float damageFalloff = 0.3f; public float knockback = 1.5f; }
 [System.Serializable] public class BuffSettings { public float statValue = 20f; public float duration = 10f; public float lootChance = 0.2f; public float baseTickRate = 1.0f; }
 
-// --- PAYLOAD (Knockback Aggiunto) ---
+// --- PAYLOAD (Knockback Preservato) ---
 [System.Serializable]
 public struct SpellPayload
 {
@@ -26,7 +26,7 @@ public struct SpellPayload
     public float damageDecay;
     public float lootLuckChance;
 
-    // NUOVO PARAMETRO
+    // Parametro Knockback mantenuto
     public float knockback;
 
     public List<Vector3> fireDirections;
@@ -56,6 +56,9 @@ public class SpellBuilder : MonoBehaviour
         p.penetration = 0;
         p.damageDecay = 0;
         p.knockback = 0;
+
+        // --- MODIFICA 1: Inizializziamo la fortuna a 0 ---
+        p.lootLuckChance = 0f;
 
         if (melody.sequence == null || melody.sequence.Count < 2)
         {
@@ -100,7 +103,8 @@ public class SpellBuilder : MonoBehaviour
                 p.powerValue = buff.statValue;
                 p.duration = buff.duration;
                 p.tickRate = buff.baseTickRate;
-                p.lootLuckChance = buff.lootChance;
+                // --- MODIFICA 2: NON assegniamo buff.lootChance qui. Deve essere guadagnato con le estensioni. ---
+                // p.lootLuckChance = buff.lootChance; // RIMOSSO
                 break;
         }
 
@@ -122,8 +126,7 @@ public class SpellBuilder : MonoBehaviour
                 break;
 
             case NoteColor.Yellow:
-                // TORNIAMO ALLA LOGICA ORIGINALE: Giallo = Scudo.
-                // Se è un buff, sarà Scudo nel Tempo.
+                // Giallo = Scudo (Logica Originale preservata)
                 p.effect = SpellEffect.Shield;
                 break;
         }
@@ -132,8 +135,7 @@ public class SpellBuilder : MonoBehaviour
         float levelMultiplier = 1.0f + ((melody.level - 1) * powerPerLevel);
         p.powerValue *= levelMultiplier;
         p.knockback *= levelMultiplier;
-
-        p.knockback *= levelMultiplier;
+        // Ho rimosso la riga duplicata "p.knockback *= levelMultiplier" che c'era nel tuo file originale
 
         // 4. ESTENSIONI (Dalla 3a nota in poi)
         int yellowCount = 0;
@@ -179,9 +181,24 @@ public class SpellBuilder : MonoBehaviour
 
     void ApplyYellowLogic(int count, ref SpellPayload p)
     {
-        if (p.delivery == SpellForm.SelfBuff) p.lootLuckChance += 0.2f;
+        if (p.delivery == SpellForm.SelfBuff)
+        {
+            // --- MODIFICA 3: LOGICA FORTUNA TIERED ---
+            if (count == 1)
+            {
+                // Prima estensione gialla: +10%
+                p.lootLuckChance += 0.10f;
+            }
+            else if (count >= 2)
+            {
+                // Seconda (o più) estensione gialla: +15% extra
+                // Totale con 2 gialli = 0.25f (25%)
+                p.lootLuckChance += 0.15f;
+            }
+        }
         else
         {
+            // Logica Attacco (Multishot) - Preservata
             if (count == 1 && !p.fireDirections.Contains(Vector3.back))
                 p.fireDirections.Add(Vector3.back);
             else if (count >= 2)

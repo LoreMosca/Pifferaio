@@ -1,7 +1,8 @@
+using System.Collections;
+using Unity.Cinemachine;
 using UnityEngine;
 using UnityEngine.InputSystem;
-using Unity.Cinemachine;
-using System.Collections;
+using UnityEngine.Windows;
 
 [RequireComponent(typeof(CharacterController))]
 [RequireComponent(typeof(PlayerStats))]
@@ -55,6 +56,11 @@ public class PlayerController : MonoBehaviour
     public float rotationSpeed = 25f;
     public float gravity = -9.81f;
 
+    [Header("--- FEELING ROTAZIONE ---")]
+    public float aimingRotationSpeed = 10f; // Velocità mentre miri col pad (senza attaccare)
+    [Range(0.1f, 1f)]
+    public float attackTurnMultiplier = 0.2f;
+
     // --- ATTACCHI CONFIG ---
     [Header("--- ATTACCHI (Stamina Based) ---")]
     [SerializeField] public AttackConfig greenConfig;
@@ -87,7 +93,10 @@ public class PlayerController : MonoBehaviour
     // Input
     private Vector2 moveInput;
     private Vector2 mousePos;
+    private Vector2 gamepadLookInput;
     private float globalActionTimer = 0f;
+
+    private bool isUsingGamepad = false;
 
     private enum PlayerState { Normal, Attacking, ChargingRed, GuardingYellow, CastingSpell }
     [SerializeField] private PlayerState currentState = PlayerState.Normal;
@@ -109,8 +118,33 @@ public class PlayerController : MonoBehaviour
         // Setup Inputs...
         inputActions.Player.Move.performed += ctx => moveInput = ctx.ReadValue<Vector2>();
         inputActions.Player.Move.canceled += ctx => moveInput = Vector2.zero;
-        inputActions.Player.Look.performed += ctx => mousePos = ctx.ReadValue<Vector2>();
 
+        // --- MODIFICA QUI (MOUSE) ---
+        // Quando il mouse si muove, diciamo al gioco "Sto usando il Mouse"
+        inputActions.Player.Look.performed += ctx => {
+            mousePos = ctx.ReadValue<Vector2>();
+            // Il mouse invia coordinate schermo (es. 1920x1080), quindi controlliamo se si muove
+            if (ctx.ReadValue<Vector2>().magnitude > 1f)
+            {
+                isUsingGamepad = false;
+            }
+        };
+
+        // --- MODIFICA QUI (GAMEPAD) ---
+        // Quando lo stick si muove, diciamo al gioco "Sto usando il Pad"
+        inputActions.Player.LookGamepad.performed += ctx => {
+            gamepadLookInput = ctx.ReadValue<Vector2>();
+            // Se lo stick è spinto, attivi il flag Gamepad
+            if (gamepadLookInput.magnitude > 0.1f)
+            {
+                isUsingGamepad = true;
+            }
+        };
+        // Quando lasci lo stick, azzeri il valore ma NON cambi isUsingGamepad (così non scatta al mouse)
+        inputActions.Player.LookGamepad.canceled += ctx => gamepadLookInput = Vector2.zero;
+
+
+        // --- LE TUE SKILL (INVARIATE) ---
         inputActions.Player.Skill1.performed += ctx => OnGreenInput();
         inputActions.Player.Skill2.performed += ctx => OnBlueInput();
         inputActions.Player.Skill3.started += ctx => OnRedInputStart();
@@ -458,13 +492,56 @@ public class PlayerController : MonoBehaviour
 
     void HandleRotation()
     {
-        Ray ray = mainCamera.ScreenPointToRay(mousePos);
-        Plane groundPlane = new Plane(Vector3.up, Vector3.zero);
-        if (groundPlane.Raycast(ray, out float enter))
+        float currentRotSpeed = rotationSpeed;
+
+        if (isUsingGamepad)
         {
-            Vector3 hitPoint = ray.GetPoint(enter);
-            Vector3 lookDir = hitPoint - visualRoot.position; lookDir.y = 0;
-            if (lookDir != Vector3.zero) visualRoot.rotation = Quaternion.Slerp(visualRoot.rotation, Quaternion.LookRotation(lookDir), rotationSpeed * Time.deltaTime);
+            Cursor.visible = false;
+
+            // MODIFICA QUI: Aggiungi "|| isChanneling"
+            if (currentState == PlayerState.Attacking ||
+                currentState == PlayerState.CastingSpell ||
+                isChanneling)
+            {
+                // Diventa pesante
+                currentRotSpeed = aimingRotationSpeed * attackTurnMultiplier;
+            }
+            else
+            {
+                currentRotSpeed = aimingRotationSpeed;
+            }
+
+            // ... (Resto del codice rotazione uguale a prima) ...
+            if (gamepadLookInput.magnitude > 0.1f)
+            {
+                Vector3 lookDir = new Vector3(gamepadLookInput.x, 0f, gamepadLookInput.y);
+                if (lookDir != Vector3.zero)
+                {
+                    Quaternion targetRotation = Quaternion.LookRotation(lookDir, Vector3.up);
+                    visualRoot.rotation = Quaternion.Slerp(visualRoot.rotation, targetRotation, currentRotSpeed * Time.deltaTime);
+                }
+            }
+        }
+        else
+        {
+            // 2. MODALITÀ MOUSE (Reattiva)
+            Cursor.visible = true;
+
+            Ray ray = mainCamera.ScreenPointToRay(mousePos);
+            Plane groundPlane = new Plane(Vector3.up, Vector3.zero);
+
+            if (groundPlane.Raycast(ray, out float enter))
+            {
+                Vector3 hitPoint = ray.GetPoint(enter);
+                Vector3 lookDir = hitPoint - visualRoot.position;
+                lookDir.y = 0;
+
+                if (lookDir != Vector3.zero)
+                {
+                    // Col mouse usiamo sempre la velocità massima (rotationSpeed)
+                    visualRoot.rotation = Quaternion.Slerp(visualRoot.rotation, Quaternion.LookRotation(lookDir), rotationSpeed * Time.deltaTime);
+                }
+            }
         }
     }
 

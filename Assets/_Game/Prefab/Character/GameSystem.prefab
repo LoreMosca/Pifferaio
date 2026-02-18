@@ -1,0 +1,110 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &3903465753781697340
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 9101823469178267491}
+  - component: {fileID: 3010237025682250303}
+  - component: {fileID: 4812659546867082078}
+  m_Layer: 0
+  m_Name: GameSystem
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &9101823469178267491
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3903465753781697340}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &3010237025682250303
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3903465753781697340}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c644320c6cf69ee48b57f8b671560304, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  allNotes:
+  - {fileID: 11400000, guid: 4d7d26078b5cfa34e9b21a34c456ba03, type: 2}
+  - {fileID: 11400000, guid: 470af1bdf3971034eb5ce54688d2201d, type: 2}
+  - {fileID: 11400000, guid: 952f35c61bcb5da4ea88b6b8a823f63b, type: 2}
+  - {fileID: 11400000, guid: e07b95faf7a379a4db9d895a4aaf1da5, type: 2}
+  tierRules:
+  - label: Comune
+    tierLevel: 1
+    minCost: 2
+    maxCost: 8
+    fixedNoteCount: 2
+  - label: Raro
+    tierLevel: 2
+    minCost: 3
+    maxCost: 12
+    fixedNoteCount: 3
+  - label: Epico
+    tierLevel: 3
+    minCost: 4
+    maxCost: 11
+    fixedNoteCount: 4
+  - label: Leggendario
+    tierLevel: 4
+    minCost: 12
+    maxCost: 16
+    fixedNoteCount: 4
+--- !u!114 &4812659546867082078
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3903465753781697340}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3ffa094c345df2e4e83e705f0d356768, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  projectile:
+    baseDamage: 15
+    speed: 20
+    size: 0.5
+    basePenetration: 0
+    knockback: 2
+  area:
+    valuePerTick: 10
+    radius: 4
+    duration: 10
+    tickInterval: 1
+    knockback: 0
+  beam:
+    startDps: 8
+    maxLength: 10
+    duration: 3.5
+    baseTickRate: 3
+    damageFalloff: 0.3
+    knockback: 1
+  buff:
+    statValue: 20
+    duration: 20
+    lootChance: 0.2
+    baseTickRate: 1
+  powerPerLevel: 0.2
