@@ -128,18 +128,32 @@ public class RatAI : MonoBehaviour
     {
         nextAttackTime = Time.time + (1f / attackRate);
 
+        // Rotazione
         Vector3 lookPos = currentTarget.position - transform.position;
         lookPos.y = 0;
         if (lookPos != Vector3.zero) transform.rotation = Quaternion.LookRotation(lookPos);
 
-        // Trigger Animazione
+        // Animazione
         if (animator != null) animator.SetTrigger("Attack");
 
-        // Danno (Sincronizzato grossolanamente, per perfezionarlo servirebbero Animation Events)
+        // --- CORREZIONE QUI ---
+        // 1. Cerca il componente sull'oggetto target
         IDamageable targetHealth = currentTarget.GetComponent<IDamageable>();
+
+        // 2. Se non lo trova, prova a cercare sul genitore (utile per character controller complessi)
+        if (targetHealth == null)
+            targetHealth = currentTarget.GetComponentInParent<IDamageable>();
+
         if (targetHealth != null)
         {
+            // Debug per essere sicuri che il danno parta
+            // Debug.Log($"Ratto attacca {currentTarget.name} per {currentDamage} danni");
             targetHealth.TakeDamage(currentDamage);
+        }
+        else
+        {
+            // Se vedi questo log, significa che il Player non ha PlayerStats o IDamageable
+            // Debug.LogWarning($"Il target {currentTarget.name} non ha uno script IDamageable!");
         }
     }
 }

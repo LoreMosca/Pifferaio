@@ -80,6 +80,9 @@ public class LootTierDefinition
 
 public class HordeManager : MonoBehaviour
 {
+    [Header("--- CONTROLLO FLUSSO (NUOVO) ---")]
+    public bool spawningActive = false; // Parte spento finché non viene attivato
+
     [Header("--- CONFIGURAZIONE ONDATE ---")]
     [Tooltip("Lista sequenziale delle ondate definite a mano.")]
     public List<Wave> waves = new List<Wave>();
@@ -103,6 +106,9 @@ public class HordeManager : MonoBehaviour
 
     [Tooltip("Distanza MASSIMA di spawn dal punto medio tra i bersagli.")]
     public float maxSpawnDistance = 20f;
+
+    [Tooltip("Trascina qui i Collider (Trigger) delle Safe Zones (Start e End).")]
+    public List<Collider> safeZones = new List<Collider>();
 
     // Riferimenti Runtime
     private Transform playerTransform;
@@ -133,11 +139,44 @@ public class HordeManager : MonoBehaviour
         StartCoroutine(GameLoop());
     }
 
+    // --- NUOVI METODI PUBBLICI PER IL FLUSSO ---
+    public void StartHorde()
+    {
+        spawningActive = true;
+        Debug.Log("<color=green>ORDA INIZIATA!</color>");
+    }
+
+    public void StopAndClearHorde()
+    {
+        spawningActive = false;
+        StopAllCoroutines(); // Ferma spawn futuri
+
+        // Uccidi tutti i nemici vivi per pulire la scena
+        GameObject[] enemies = GameObject.FindGameObjectsWithTag("Nemico");
+        foreach (var enemy in enemies)
+        {
+            // Prova a ucciderli "bene" (animazione morte)
+            IDamageable dmg = enemy.GetComponent<IDamageable>();
+            if (dmg != null) dmg.TakeDamage(9999f);
+            else Destroy(enemy); // O distruggi brutalmente se non hanno stats
+        }
+
+        Debug.Log("<color=green>ORDA FERMATA E NEMICI ELIMINATI.</color>");
+    }
+    // ------------------------------------------
+
     IEnumerator GameLoop()
     {
         yield return new WaitForSeconds(2f); // Breve attesa all'avvio scena
 
-        while (true)
+        // --- MODIFICA: Attendi che qualcuno attivi l'orda ---
+        while (!spawningActive)
+        {
+            yield return null;
+        }
+        // ----------------------------------------------------
+
+        while (spawningActive) // Aggiunto check spawningActive al loop
         {
             Wave currentWave = GetWave(currentWaveIndex);
             Debug.Log($"<color=cyan>--- INIZIO {currentWave.waveName} ---</color>");
@@ -176,6 +215,9 @@ public class HordeManager : MonoBehaviour
 
         for (int i = 0; i < group.count; i++)
         {
+            // Se l'orda è stata fermata mentre spawnava, interrompi
+            if (!spawningActive) break;
+
             SpawnEnemy(group.prefab, group.level);
 
             // Ritmo di spawn
@@ -224,41 +266,41 @@ public class HordeManager : MonoBehaviour
     // --- LOGICA DI SPAWN AVANZATA (SAFE ZONES) ---
     Vector3 GetSafeSmartSpawnPosition()
     {
-        // Centro ideale: punto medio tra Player e Principe (se esistono entrambi)
         Vector3 center = transform.position;
         if (playerTransform && princeTransform)
             center = (playerTransform.position + princeTransform.position) * 0.5f;
-        else if (playerTransform)
-            center = playerTransform.position;
-        else if (princeTransform)
-            center = princeTransform.position;
+        else if (playerTransform) center = playerTransform.position;
+        else if (princeTransform) center = princeTransform.position;
 
-        // TENTATIVI (Rejection Sampling): Cerchiamo un punto valido
-        // Facciamo 10 tentativi di trovare un punto che non sia troppo vicino A NESSUNO dei due.
-        for (int i = 0; i < 15; i++)
+        for (int i = 0; i < 20; i++) // Aumentato a 20 tentativi
         {
-            // Punto casuale nell'anello esterno
             Vector2 randomCircle = Random.insideUnitCircle.normalized * Random.Range(minSafeDistance * 1.5f, maxSpawnDistance);
             Vector3 candidatePos = center + new Vector3(randomCircle.x, 0, randomCircle.y);
 
-            // VERIFICA 1: Distanza dal Player
-            if (playerTransform && Vector3.Distance(candidatePos, playerTransform.position) < minSafeDistance)
-                continue; // Troppo vicino al player, riprova
+            // 1. Check Distanza Player/Prince
+            if (playerTransform && Vector3.Distance(candidatePos, playerTransform.position) < minSafeDistance) continue;
+            if (princeTransform && Vector3.Distance(candidatePos, princeTransform.position) < minSafeDistance) continue;
 
-            // VERIFICA 2: Distanza dal Principe
-            if (princeTransform && Vector3.Distance(candidatePos, princeTransform.position) < minSafeDistance)
-                continue; // Troppo vicino al principe, riprova
+            // 2. CHECK SAFE ZONES (NUOVO)
+            bool insideSafeZone = false;
+            foreach (var zone in safeZones)
+            {
+                if (zone != null && zone.bounds.Contains(candidatePos))
+                {
+                    insideSafeZone = true;
+                    break;
+                }
+            }
+            if (insideSafeZone) continue; // Punto scartato, è in una safe zone
 
-            // VERIFICA 3: NavMesh (è un punto camminabile?)
+            // 3. Check NavMesh
             NavMeshHit hit;
             if (NavMesh.SamplePosition(candidatePos, out hit, 4.0f, NavMesh.AllAreas))
             {
-                return hit.position; // PUNTO VALIDO TROVATO!
+                return hit.position;
             }
         }
 
-        // Fallback: Se dopo 15 tentativi non trovo nulla (es. mappa stretta),
-        // ritorno una posizione lontana generica rispetto al centro.
         return center + (Vector3.forward * maxSpawnDistance);
     }
 

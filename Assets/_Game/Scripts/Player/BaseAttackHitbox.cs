@@ -17,40 +17,41 @@ public class BasicAttackHitbox : MonoBehaviour
 
     void OnTriggerEnter(Collider other)
     {
-        if (other.CompareTag("Player") || other.isTrigger) return;
+        // 1. PROTEZIONE FUOCO AMICO: Ignora sempre Player e Principe
+        if (other.CompareTag("Player") || other.CompareTag("Principe")) return;
 
-        // Evita di colpire due volte lo stesso nemico nello stesso swing
-        if (hitTargets.Contains(other.gameObject)) return;
-
-        // 1. APPLICA DANNO
+        // 2. CERCA COMPONENTE VITA (IDamageable)
+        // Lo cerchiamo SUBITO, prima di decidere se ignorare l'oggetto
         var target = other.GetComponent<IDamageable>();
         if (target == null) target = other.GetComponentInParent<IDamageable>();
 
+        // 3. FILTRO TRIGGER:
+        // Se l'oggetto NON ha vita (target == null) ED è un trigger (other.isTrigger),
+        // allora è probabilmente un'area di vista dei nemici -> Ignoralo.
+        // MA: Se 'target' esiste (es. la Porta), entriamo nell'if successivo anche se è un trigger.
+        if (target == null && other.isTrigger) return;
+
+        // 4. EVITA DOPPI COLPI
+        if (hitTargets.Contains(other.gameObject)) return;
+
+        // 5. APPLICA DANNO
         if (target != null)
         {
             target.TakeDamage(damageAmount);
             hitTargets.Add(other.gameObject);
+
+            // Debug per capire se colpisce la porta
+            Debug.Log($"Colpito: {other.name} per {damageAmount} danni.");
         }
 
-        // 2. APPLICA SPINTA (FISICA)
-        // Cerchiamo il Rigidbody direttamente sul collider o sul padre
+        // 6. APPLICA SPINTA (FISICA)
         Rigidbody rb = other.attachedRigidbody;
-
-        // Applica forza solo se c'è un RB e non è cinematico
         if (rb != null && !rb.isKinematic && knockbackAmount > 0)
         {
-            // Calcola direzione: Spinge nella direzione in cui sta andando l'attacco (transform.forward)
-            // Appiattiamo la Y per evitare che i nemici volino in cielo come palloncini
             Vector3 pushDir = transform.forward;
             pushDir.y = 0;
             pushDir.Normalize();
-
-            // Aggiunge un leggero vettore verso l'alto per "scollare" il nemico da terra (attrito)
-            Vector3 finalForce = (pushDir + Vector3.up * 0.2f).normalized * knockbackAmount;
-
-            rb.AddForce(finalForce, ForceMode.Impulse);
-
-            Debug.Log($"Pushing {other.name} with force {knockbackAmount}");
+            rb.AddForce((pushDir + Vector3.up * 0.2f) * knockbackAmount, ForceMode.Impulse);
         }
     }
 }

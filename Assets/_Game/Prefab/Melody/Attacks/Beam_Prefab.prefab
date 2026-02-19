@@ -128,6 +128,6 @@ MonoBehaviour:
   coreIntensity: 3
   hitLayers:
     serializedVersion: 2
-    m_Bits: 64
+    m_Bits: 65
   visualPenetration: 3
   rampUpSpeed: 0.5
